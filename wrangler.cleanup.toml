@@ -1,0 +1,12 @@
+name = "TODO_your_project_name-cleanup"
+main = "scripts/cleanup.ts"
+compatibility_date = "2025-10-03"
+
+# D1 Database binding - must match wrangler.toml
+[[d1_databases]]
+binding = "DB"
+database_name = "TODO_your_d1_database_name"
+database_id = "TODO_your_d1_database_id"
+
+[triggers]
+crons = ["0 9 * * *"]  # Daily at 09:00 UTC (adjust as needed)

@@ -1,0 +1,48 @@
+name = "TODO_your_project_name"
+compatibility_date = "2025-10-03"
+pages_build_output_dir = "./public"
+
+# Pages Functions / primary worker configuration. Scheduled jobs such as the
+# nightly cleanup run via a separate config (`wrangler.cleanup.toml`).
+
+# D1 Database binding
+# Create with: wrangler d1 create <database_name>
+[[d1_databases]]
+binding = "DB"
+database_name = "TODO_your_d1_database_name"
+database_id = "TODO_your_d1_database_id"
+
+# KV namespace for rate limiting
+# Create with: wrangler kv:namespace create "RATE_LIMIT_KV"
+[[kv_namespaces]]
+binding = "RATE_LIMIT_KV"
+id = "TODO_your_kv_namespace_id"
+preview_id = "TODO_your_kv_preview_id"
+
+# Environment variables
+[vars]
+# Non-secret configuration
+SESSION_IDLE_MIN = "30"
+SESSION_ABSOLUTE_HOURS = "12"
+MAGIC_LINK_TTL_MIN = "10"
+INVITES_PER_EMAIL_PER_HOUR = "3"
+INVITES_PER_IP_PER_10MIN = "5"
+VERIFY_PER_IP_PER_10MIN = "15"
+VERIFY_PER_TOKEN_PER_10MIN = "5"
+STRIPE_CREATE_PER_HOUR = "10"
+STRIPE_STATUS_PER_HOUR = "30"
+ENABLE_DEBUG_LOGS = "false"
+
+# Secrets (set via wrangler secret or dashboard)
+# KEK_B64
+# TURNSTILE_SITE_KEY
+# TURNSTILE_SECRET_KEY
+# GMAIL_CLIENT_ID
+# GMAIL_CLIENT_SECRET
+# GMAIL_REFRESH_TOKEN
+# GMAIL_FROM
+# APP_BASE_URL
+# ACCESS_AUD
+# STRIPE_SECRET_KEY
+# STRIPE_PUBLISHABLE_KEY
+# STRIPE_WEBHOOK_SECRET
