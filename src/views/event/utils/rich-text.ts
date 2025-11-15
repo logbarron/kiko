@@ -2,10 +2,43 @@ import { escapeHtml } from './escape';
 
 type ListState = 'none' | 'ul' | 'ol';
 
+function unescapeHtml(text: string): string {
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'");
+}
+
+function isAllowedUrl(url: string): boolean {
+  const trimmed = url.trim().toLowerCase();
+  if (
+    trimmed.startsWith('javascript:') ||
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('vbscript:') ||
+    trimmed.startsWith('file:')
+  ) {
+    return false;
+  }
+  return true;
+}
+
 function formatInline(text: string): string {
   const escaped = escapeHtml(text);
 
-  const boldReplaced = escaped
+  // Handle markdown links: [text](url)
+  const linkReplaced = escaped.replace(/\[([^\]]+)\]\(([^\)]+)\)/g, (match, linkText, linkUrl) => {
+    const url = unescapeHtml(linkUrl);
+    if (!isAllowedUrl(url)) {
+      return match; // Keep original if URL is dangerous
+    }
+    const escapedUrl = escapeHtml(url);
+    // linkText is already escaped from the initial escapeHtml call
+    return `<a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${linkText}</a>`;
+  });
+
+  const boldReplaced = linkReplaced
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/__(.+?)__/g, '<strong>$1</strong>');
 
