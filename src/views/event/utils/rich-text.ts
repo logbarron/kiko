@@ -41,21 +41,120 @@ function normalizeUrl(url: string): string {
   return trimmed;
 }
 
+function isEscaped(text: string, index: number): boolean {
+  let slashCount = 0;
+  for (let i = index - 1; i >= 0 && text[i] === '\\'; i--) {
+    slashCount++;
+  }
+  return slashCount % 2 === 1;
+}
+
+function findClosingBracket(text: string, startIndex: number): number {
+  for (let i = startIndex; i < text.length; i++) {
+    if (text[i] === ']' && !isEscaped(text, i)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function findClosingParenthesis(text: string, startIndex: number): number {
+  let depth = 1;
+  for (let i = startIndex; i < text.length; i++) {
+    const char = text[i];
+    if ((char === '(' || char === ')') && isEscaped(text, i)) {
+      continue;
+    }
+    if (char === '(') {
+      depth++;
+      continue;
+    }
+    if (char === ')') {
+      depth--;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+  return -1;
+}
+
+function replaceMarkdownLinks(
+  input: string,
+  onLink: (linkText: string, linkUrl: string, rawMatch: string) => string
+): string {
+  let cursor = 0;
+  let output = '';
+
+  while (cursor < input.length) {
+    const openBracket = input.indexOf('[', cursor);
+    if (openBracket === -1) {
+      output += input.slice(cursor);
+      break;
+    }
+
+    if (isEscaped(input, openBracket)) {
+      output += input.slice(cursor, openBracket + 1);
+      cursor = openBracket + 1;
+      continue;
+    }
+
+    const closeBracket = findClosingBracket(input, openBracket + 1);
+    if (closeBracket === -1) {
+      output += input.slice(cursor);
+      break;
+    }
+
+    const openParen = closeBracket + 1;
+    if (
+      openParen >= input.length ||
+      input[openParen] !== '(' ||
+      isEscaped(input, openParen)
+    ) {
+      output += input.slice(cursor, openParen);
+      cursor = openParen;
+      continue;
+    }
+
+    const closeParen = findClosingParenthesis(input, openParen + 1);
+    if (closeParen === -1) {
+      output += input.slice(cursor);
+      break;
+    }
+
+    output += input.slice(cursor, openBracket);
+
+    const linkText = input.slice(openBracket + 1, closeBracket);
+    const linkUrl = input.slice(openParen + 1, closeParen);
+    const rawMatch = input.slice(openBracket, closeParen + 1);
+    output += onLink(linkText, linkUrl, rawMatch);
+
+    cursor = closeParen + 1;
+  }
+
+  return output;
+}
+
 function formatInline(text: string): string {
-  // Process links FIRST, before any HTML escaping
-  // This allows us to handle formatting inside link text and URLs separately
-  const linkReplaced = text.replace(/\[([^\]]+)\]\(([^\)]+)\)/g, (match, linkText, linkUrl) => {
+  // Store processed links in an array
+  const links: string[] = [];
+
+  // Extract links and replace with simple placeholders
+  const linkReplaced = replaceMarkdownLinks(text, (linkText, linkUrl, rawMatch) => {
     const url = linkUrl.trim();
     if (!isAllowedUrl(url)) {
-      // Return escaped original text if URL is dangerous
-      return escapeHtml(match);
+      // If URL is dangerous, just return the escaped original text
+      return escapeHtml(rawMatch);
     }
 
     const normalizedUrl = normalizeUrl(url);
     const escapedUrl = escapeHtml(normalizedUrl);
 
-    // Process markdown formatting inside link text, then escape
-    let formattedText = linkText;
+    // Escape the link text FIRST to neutralize any HTML, THEN apply markdown formatting
+    const escapedText = escapeHtml(linkText);
+
+    // Now process markdown formatting - the content is safe, and we're adding safe HTML tags
+    let formattedText = escapedText;
     formattedText = formattedText
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
       .replace(/__(.+?)__/g, '<strong>$1</strong>');
@@ -65,10 +164,15 @@ function formatInline(text: string): string {
       .replace(/_(.+?)_/g, '<em>$1</em>');
     formattedText = formattedText.replace(/`([^`]+)`/g, '<code>$1</code>');
 
-    const escapedLinkText = escapeHtml(formattedText);
+    // Don't escape again - content is already safe, tags are intentional HTML
 
-    // Use a placeholder that won't be affected by subsequent processing
-    return `__LINK__${escapedUrl}__TEXT__${escapedLinkText}__ENDLINK__`;
+    // Store the complete link HTML
+    const linkHtml = `<a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${formattedText}</a>`;
+    const index = links.length;
+    links.push(linkHtml);
+
+    // Return a unique placeholder that won't match markdown patterns or get stripped
+    return `{{MDLINK${index}}}`;
   });
 
   // Now escape all remaining HTML (non-link content)
@@ -87,9 +191,11 @@ function formatInline(text: string): string {
 
   const backtickReplaced = italicReplaced.replace(/`([^`]+)`/g, '<code>$1</code>');
 
-  // Finally, restore links from placeholders
-  const final = backtickReplaced.replace(/__LINK__(.+?)__TEXT__(.+?)__ENDLINK__/g,
-    '<a href="$1" target="_blank" rel="noopener noreferrer">$2</a>');
+  // Finally, restore links from the array
+  // {{MDLINK0}} passes through escapeHtml unchanged (only & < > " ' are escaped)
+  const final = backtickReplaced.replace(/\{\{MDLINK(\d+)\}\}/g, (match, index) => {
+    return links[parseInt(index, 10)] || match;
+  });
 
   return final;
 }
