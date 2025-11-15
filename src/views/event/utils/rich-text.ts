@@ -42,21 +42,40 @@ function normalizeUrl(url: string): string {
 }
 
 function formatInline(text: string): string {
-  const escaped = escapeHtml(text);
-
-  // Handle markdown links: [text](url)
-  const linkReplaced = escaped.replace(/\[([^\]]+)\]\(([^\)]+)\)/g, (match, linkText, linkUrl) => {
-    const url = unescapeHtml(linkUrl);
+  // Process links FIRST, before any HTML escaping
+  // This allows us to handle formatting inside link text and URLs separately
+  const linkReplaced = text.replace(/\[([^\]]+)\]\(([^\)]+)\)/g, (match, linkText, linkUrl) => {
+    const url = linkUrl.trim();
     if (!isAllowedUrl(url)) {
-      return match; // Keep original if URL is dangerous
+      // Return escaped original text if URL is dangerous
+      return escapeHtml(match);
     }
+
     const normalizedUrl = normalizeUrl(url);
     const escapedUrl = escapeHtml(normalizedUrl);
-    // linkText is already escaped from the initial escapeHtml call
-    return `<a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${linkText}</a>`;
+
+    // Process markdown formatting inside link text, then escape
+    let formattedText = linkText;
+    formattedText = formattedText
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/__(.+?)__/g, '<strong>$1</strong>');
+    formattedText = formattedText.replace(/==(.+?)==/g, '<span class="gold">$1</span>');
+    formattedText = formattedText
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/_(.+?)_/g, '<em>$1</em>');
+    formattedText = formattedText.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+    const escapedLinkText = escapeHtml(formattedText);
+
+    // Use a placeholder that won't be affected by subsequent processing
+    return `__LINK__${escapedUrl}__TEXT__${escapedLinkText}__ENDLINK__`;
   });
 
-  const boldReplaced = linkReplaced
+  // Now escape all remaining HTML (non-link content)
+  const escaped = escapeHtml(linkReplaced);
+
+  // Process remaining markdown formatting (outside of links)
+  const boldReplaced = escaped
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/__(.+?)__/g, '<strong>$1</strong>');
 
@@ -68,7 +87,11 @@ function formatInline(text: string): string {
 
   const backtickReplaced = italicReplaced.replace(/`([^`]+)`/g, '<code>$1</code>');
 
-  return backtickReplaced;
+  // Finally, restore links from placeholders
+  const final = backtickReplaced.replace(/__LINK__(.+?)__TEXT__(.+?)__ENDLINK__/g,
+    '<a href="$1" target="_blank" rel="noopener noreferrer">$2</a>');
+
+  return final;
 }
 
 export function renderRichTextBlock(input: string | undefined | null): string {
