@@ -24,6 +24,23 @@ function isAllowedUrl(url: string): boolean {
   return true;
 }
 
+function normalizeUrl(url: string): string {
+  const trimmed = url.trim();
+
+  // If it already has a protocol, return as-is
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  // If it looks like a domain (contains a dot and no slashes at the start), prepend https://
+  if (/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}/i.test(trimmed)) {
+    return `https://${trimmed}`;
+  }
+
+  // Otherwise, return as-is (relative URLs, etc.)
+  return trimmed;
+}
+
 function formatInline(text: string): string {
   const escaped = escapeHtml(text);
 
@@ -33,7 +50,8 @@ function formatInline(text: string): string {
     if (!isAllowedUrl(url)) {
       return match; // Keep original if URL is dangerous
     }
-    const escapedUrl = escapeHtml(url);
+    const normalizedUrl = normalizeUrl(url);
+    const escapedUrl = escapeHtml(normalizedUrl);
     // linkText is already escaped from the initial escapeHtml call
     return `<a href="${escapedUrl}" target="_blank" rel="noopener noreferrer">${linkText}</a>`;
   });
