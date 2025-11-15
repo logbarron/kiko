@@ -815,6 +815,19 @@ function getEventCss({ serif, sans }: EventStyleFonts): string {
       border-radius: 4px;
     }
 
+    .rich-text a,
+    .rich-text-inline a {
+      color: var(--ink-780);
+      text-decoration: none;
+      transition: color 0.2s ease;
+    }
+
+    .rich-text a:hover,
+    .rich-text-inline a:hover {
+      color: var(--ink-920);
+      text-decoration: underline;
+    }
+
     .schedule-card-header {
       display: flex;
       flex-direction: column;
