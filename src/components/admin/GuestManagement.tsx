@@ -3,6 +3,7 @@ import { formatDistanceToNow } from 'date-fns';
 import { cn } from '../../lib/utils';
 import type { AttendanceRecord } from '../../types';
 import { toast } from 'sonner';
+import { adminFetch, isAdminAuthError } from './admin-auth';
 
 import {
   Card,
@@ -1117,7 +1118,9 @@ const GuestDetail = ({
       await onUpdateMealSelection(eventId, personId, mealKey);
     } catch (error) {
       setDraftMeals((prev) => ({ ...prev, [cellKey]: previousValue }));
-      toast.error('Unable to update meal selection');
+      if (!isAdminAuthError(error)) {
+        toast.error('Unable to update meal selection');
+      }
     } finally {
       setPendingMealRequests((prev) => {
         const next = new Set(prev);
@@ -1588,13 +1591,16 @@ export function GuestManagement({
     setAuditLoading((prev) => ({ ...prev, [guestId]: true }));
     setAuditError((prev) => ({ ...prev, [guestId]: null }));
     try {
-      const response = await fetch(`/admin/audit?guest_id=${guestId}&limit=50`);
+      const response = await adminFetch(`/admin/audit?guest_id=${guestId}&limit=50`);
       if (!response.ok) {
         throw new Error(`Request failed with status ${response.status}`);
       }
       const data = await response.json() as AuditEvent[];
       setAuditLogs((prev) => ({ ...prev, [guestId]: data }));
     } catch (error) {
+      if (isAdminAuthError(error)) {
+        return;
+      }
       console.error('Failed to load audit events', error);
       setAuditError((prev) => ({ ...prev, [guestId]: 'Unable to load activity log.' }));
     } finally {
@@ -2114,7 +2120,7 @@ export function GuestManagement({
         })
       };
 
-      const response = await fetch('/admin/group-email', {
+      const response = await adminFetch('/admin/group-email', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -2151,6 +2157,9 @@ export function GuestManagement({
       setRecipientCustomIds([]);
 
     } catch (error) {
+      if (isAdminAuthError(error)) {
+        return;
+      }
       console.error('Group email error:', error);
       toast.error('Failed to send email');
     } finally {

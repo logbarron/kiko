@@ -19,6 +19,7 @@ import { GuestManagement, type InviteFormState, type Guest as AdminGuest } from 
 import { ThemeToggle } from './ThemeToggle';
 import { ButtonGroup } from '../ui/button-group';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
+import { adminFetch, isAdminAuthError } from './admin-auth';
 
 type EventDetails = CanonicalEventDetails;
 
@@ -173,10 +174,13 @@ export function AdminDashboard() {
 
     setIsLoading(true);
     try {
-      const response = await fetch('/admin/guests');
+      const response = await adminFetch('/admin/guests');
       const guestData = await response.json() as AdminGuest[];
       setGuests(guestData);
     } catch (error) {
+      if (isAdminAuthError(error)) {
+        return;
+      }
       console.error('Error loading guests:', error);
       toast.error('Failed to load guests');
     } finally {
@@ -227,7 +231,7 @@ export function AdminDashboard() {
     setInviteRequestMode(mode);
     setIsLoading(true);
     try {
-      const response = await fetch('/admin/invite', {
+      const response = await adminFetch('/admin/invite', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
@@ -248,10 +252,14 @@ export function AdminDashboard() {
 
       const fallbackText = await responseClone.text();
       const details = errorDetail ?? (fallbackText || undefined);
-      toast.error(`Failed to send invite: ${details ?? 'Unknown error'}`);
+      const action = shouldSendEmail ? 'send email invite' : 'add guest';
+      toast.error(`Failed to ${action}: ${details ?? 'Unknown error'}`);
       return false;
     } catch (error) {
-      toast.error('Failed to send invite');
+      if (isAdminAuthError(error)) {
+        return false;
+      }
+      toast.error(shouldSendEmail ? 'Failed to send email invite' : 'Failed to add guest');
       return false;
     } finally {
       setIsLoading(false);
@@ -274,7 +282,7 @@ export function AdminDashboard() {
       onConfirm: async () => {
         setConfirmDialog(null);
         try {
-          const response = await fetch('/admin/guests', {
+          const response = await adminFetch('/admin/guests', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'resend', guestId }),
@@ -293,6 +301,9 @@ export function AdminDashboard() {
             toast.error(`Failed to resend invite: ${details ?? 'Unknown error'}`);
           }
         } catch (error) {
+          if (isAdminAuthError(error)) {
+            return;
+          }
           toast.error('Failed to resend invite');
         }
       }
@@ -316,7 +327,7 @@ export function AdminDashboard() {
       onConfirm: async () => {
         setConfirmDialog(null);
         try {
-          const response = await fetch('/admin/guests', {
+          const response = await adminFetch('/admin/guests', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'delete', guestId: guest.id }),
@@ -334,6 +345,9 @@ export function AdminDashboard() {
             toast.error(`Failed to remove guest: ${details ?? 'Unknown error'}`);
           }
         } catch (error) {
+          if (isAdminAuthError(error)) {
+            return;
+          }
           toast.error('Failed to remove guest');
         }
       }
@@ -342,7 +356,7 @@ export function AdminDashboard() {
 
   const updateGuestVisibility = async (guestId: number, visibility: Record<string, boolean>) => {
     try {
-      const response = await fetch('/admin/guests', {
+      const response = await adminFetch('/admin/guests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -356,13 +370,16 @@ export function AdminDashboard() {
         await loadGuests({ preserveScroll: true });
       }
     } catch (error) {
+      if (isAdminAuthError(error)) {
+        return;
+      }
       console.error('Error updating permissions:', error);
     }
   };
 
   const updateGuestAllowPlusOne = async (guestId: number, allowPlusOne: boolean) => {
     try {
-      const response = await fetch('/admin/guests', {
+      const response = await adminFetch('/admin/guests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -376,6 +393,9 @@ export function AdminDashboard() {
         await loadGuests({ preserveScroll: true });
       }
     } catch (error) {
+      if (isAdminAuthError(error)) {
+        return;
+      }
       console.error('Error updating plus one status:', error);
     }
   };
@@ -387,7 +407,7 @@ export function AdminDashboard() {
     status: 'yes' | 'no' | 'pending'
   ) => {
     try {
-      const response = await fetch('/admin/guests', {
+      const response = await adminFetch('/admin/guests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -401,6 +421,9 @@ export function AdminDashboard() {
         await loadGuests({ preserveScroll: true });
       }
     } catch (error) {
+      if (isAdminAuthError(error)) {
+        return;
+      }
       console.error('Error updating event attendance:', error);
     }
   };
@@ -411,7 +434,7 @@ export function AdminDashboard() {
     personId: string,
     mealKey: string | null
   ) => {
-    const response = await fetch('/admin/guests', {
+    const response = await adminFetch('/admin/guests', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -430,13 +453,16 @@ export function AdminDashboard() {
 
   const loadEventDetails = async () => {
     try {
-      const response = await fetch('/admin/event');
+      const response = await adminFetch('/admin/event');
       if (response.ok) {
         const data = await response.json() as EventDetails;
         setEventDetails(data);
         setEventForm(data);
       }
     } catch (error) {
+      if (isAdminAuthError(error)) {
+        return;
+      }
       console.error('Error loading event details:', error);
     } finally {
       setEventDetailsLoaded(true);
@@ -446,7 +472,7 @@ export function AdminDashboard() {
   const saveEventDetails = async () => {
     setIsLoading(true);
     try {
-      const response = await fetch('/admin/event', {
+      const response = await adminFetch('/admin/event', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(eventForm)
@@ -467,6 +493,9 @@ export function AdminDashboard() {
         toast.error(msg);
       }
     } catch (error) {
+      if (isAdminAuthError(error)) {
+        return;
+      }
       toast.error('Failed to update event details');
     } finally {
       setIsLoading(false);
