@@ -75,12 +75,13 @@ Configuration files that define the build pipeline, deployment settings, and Typ
 
 **Key Settings**:
 - `strict: true`: Enables all strict type checks
-- `noUncheckedIndexedAccess: true`: Forces index access safety
-- `paths: { "@/*": ["./src/*"] }`: Allows `@/` imports
+- `paths: { "@/*": ["src/*"] }`: Allows `@/` imports
 - `target: ES2022`, `lib: ES2022`: Modern JavaScript features
-- `moduleResolution: bundler`: Vite-compatible resolution
+- `moduleResolution: node`: Node-style module resolution
+- `jsx: react-jsx`: React 18+ JSX transform
 
-**Includes**: `src/`, `functions/`, `tests/`
+**Includes**: `functions/**/*.ts`, `functions/**/*.tsx`, `src/**/*.ts`, `src/**/*.tsx`, `scripts/**/*.ts`
+**Excludes**: `node_modules`, `dist`, `tests/e2e/**`
 
 ---
 
@@ -91,8 +92,10 @@ Configuration files that define the build pipeline, deployment settings, and Typ
 **Key Settings**:
 - Plugin: `@vitejs/plugin-react` with Fast Refresh
 - Alias: `@/` resolves to `src/`
-- Output: Emits to `/public/build` (JS, CSS, sourcemaps)
-- Build: Minifies for production, generates manifest
+- Output: Emits to `/public/build`
+- Entry: `enhance.js` (stable filename, no hash)
+- Chunks: Named with hashes (`[name]-[hash].js`)
+- No sourcemaps or manifest file generated
 
 ---
 
@@ -102,14 +105,13 @@ Configuration files that define the build pipeline, deployment settings, and Typ
 
 **Key Features**:
 - Dark mode: `class` strategy (`.dark` class on `<html>`)
-- Custom colors: Extends neutral palette with teal accents
-- Animations: Custom keyframes for fade, slide, accordion
+- Custom colors: Extends palette with rose accents (rose-50 through rose-900)
+- Animations: Custom keyframes for fade, pulse, accordion
 - Plugins: `@tailwindcss/forms`, `tailwindcss-animate`
-- Content paths: Scans `src/**/*.{ts,tsx}` and `public/index.html`
+- Content paths: Scans `src/**/*.{ts,tsx}`, `functions/**/*.{ts,tsx}`, and `public/**/*.html`
 
 **Fonts**:
-- Sans: System font stack (SF Pro, Segoe UI, Roboto)
-- Mono: SF Mono, Consolas, monospace
+- Sans: System font stack (-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica Neue, Arial, Noto Sans)
 
 ---
 
@@ -158,9 +160,9 @@ Configuration files that define the build pipeline, deployment settings, and Typ
 - `X-Content-Type-Options: nosniff`
 - `X-Frame-Options: DENY`
 - `Referrer-Policy: no-referrer`
-- `Cache-Control: public, max-age=31536000` for static assets
+- `Cache-Control: public, max-age=31536000, immutable` for `/build/*` only
 
-**Notes**: Middleware dynamically replaces `{NONCE}` per request
+**Notes**: Middleware dynamically replaces `{NONCE}` per request. Long cache headers only apply to build output, not all static assets.
 
 ---
 
@@ -182,11 +184,11 @@ Configuration files that define the build pipeline, deployment settings, and Typ
 
 ### public/main.css
 
-**Purpose**: Hand-written base styles for landing page and SSR pages.
+**Purpose**: Hand-written base styles for landing page.
 
 **Features**:
 - CSS custom properties for theme colors
-- Dark mode support via `html.dark` selector
+- Dark mode support via `body[data-theme="dark"]` selector
 - Layout styles for container, logo, buttons
 - Screen reader utilities
 
@@ -194,15 +196,16 @@ Configuration files that define the build pipeline, deployment settings, and Typ
 
 ### public/theme-toggle.js
 
-**Purpose**: Client-side theme persistence using localStorage.
+**Purpose**: Client-side theme persistence for landing page using localStorage.
 
 **Features**:
-- Reads `theme` from localStorage on load
-- Applies `.dark` class to `<html>` element
+- Reads `guest-theme` from localStorage on load
+- Applies `data-theme` attribute to `<body>` element
 - Swaps logo images based on theme
 - Updates ARIA attributes for accessibility
+- Dispatches `themechange` custom event
 
-**Storage Key**: `theme` (values: `'light'`, `'dark'`)
+**Storage Key**: `guest-theme` (values: `'light'`, `'dark'`, or absent for system default)
 
 ---
 
@@ -221,12 +224,12 @@ Configuration files that define the build pipeline, deployment settings, and Typ
 **Purpose**: Theme-aware images for hero sections and event categories.
 
 **Structure**:
-- `light/`: Images for light mode (hero, ceremony, reception, travel, registry, RSVP)
-- `dark/`: Images for dark mode (same categories with `-dark` suffix)
+- `light/`: Images for light mode (hero.webp, ceremony.webp, reception.webp, travel.webp, registry.webp, rsvp.webp)
+- `dark/`: Images for dark mode (herodark.webp, ceremonydark.webp, etc. - no hyphen in `dark` suffix)
 
 **Format**: WebP for optimal compression
 
-**Theme Switching**: React components conditionally load based on `html.dark` class
+**Theme Switching**: SSR views use `renderThemePicture()` helper with `<picture>` elements and media queries
 
 ---
 

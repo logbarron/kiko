@@ -3,7 +3,7 @@
 ## Where to Start
 
 **If you're starting fresh (cloned repo, no local setup):**
-→ Follow the Quick Start commands in `README.md` plus the 9-step checklist in [docs/codebase/README.md](./codebase/README.md#setup-checklist---9-required-steps), then continue below
+→ Follow the Quick Start commands in `README.md`, then continue below
 
 **If you already have local dev working with test keys:**
 → Skip to [Production Setup](#production-setup-first-time)
@@ -15,7 +15,7 @@
 
 ## Placeholder Legend
 
-Use these tokens whenever an instruction requires project-specific values. The legend matches [docs/codebase/README.md](./codebase/README.md#placeholder-legend).
+Use these tokens whenever an instruction requires project-specific values.
 
 | Placeholder | Description |
 | --- | --- |
@@ -81,9 +81,6 @@ database_id = "<your-d1-database-id>"
 ```bash
 npm run migrate
 # Verify: wrangler d1 execute <your-d1-database-name> --command="SELECT name FROM sqlite_master WHERE type='table';"
-
-then run
-wrangler d1 migrations apply <your-d1-database-name> --remote
 ```
 
 ### 4. Generate Encryption Key
@@ -106,7 +103,7 @@ Add these secrets (START WITH TEST KEYS, swap to production after testing):
 - `GMAIL_REFRESH_TOKEN` - From OAuth flow
 - `GMAIL_FROM` - `<your-from-email>`
 - `APP_BASE_URL` - `https://<your-domain>`
-- `ACCESS_AUD` - `<your-access-aud-tag>` from the Cloudflare Access application (see step 7) - Currently unused but defined in types for future JWT validation
+- `ACCESS_AUD` - `<your-access-aud-tag>` from the Cloudflare Access application (see step 7) - Required for JWT validation (unless `DEV_MODE=true`)
 - `ACCESS_JWT_ISS` - `<your-access-jwt-issuer>` (`https://<your-access-team-subdomain>`)
 - `ACCESS_CERTS_CACHE_MIN` - Minutes to cache Access JWKS responses (default `5`; increase if JWKS endpoint rate limits)
 - `RSVP_SUBMISSIONS_PER_10MIN` - Number of RSVP submissions allowed per guest/IP in a 10 minute window (set to 20 for production)
@@ -117,7 +114,7 @@ Add these secrets (START WITH TEST KEYS, swap to production after testing):
 ### 6. Create KV Namespace (Required for Production)
 ```bash
 # Required for rate limiting in production (optional only with DEV_MODE=true)
-wrangler kv:namespace create "RATE_LIMIT_KV"
+wrangler kv namespace create "RATE_LIMIT_KV"
 # Copy BOTH the id and preview_id from output
 
 # Update wrangler.toml:
@@ -186,7 +183,7 @@ wrangler pages deploy ./public --project-name=<your-pages-project-name>
 
 ### 10. Configure Stripe Webhook
 1. Stripe Dashboard → Webhooks → Add destination
-2. Events: `checkout.session.completed`
+2. Events: `checkout.session.completed` (also handles `checkout.session.async_payment_failed` for logging)
 3. Setup:
   - Events from: leave “Your account” (we only need live account events). Use the test/live switch at the top of
     Stripe when you want to hit staging.
@@ -345,16 +342,18 @@ wrangler pages deployment list --project-name=<your-pages-project-name>
 ## Pre-Production Checklist
 
 ### Email Subject Lines
-Update these in `src/lib/gmail.ts` before deployment:
-- Line 432: Replace `'UPDATE MAGIC LINK SUBJECT'` with your subject
-- Line 456: Replace `'UPDATE INVITATION SUBJECT'` with your subject
+Email subjects are configured through the admin panel and stored in `EventDetails`:
+- `EventDetails.magicLinkEmailSubject` - Subject for magic link emails
+- `EventDetails.inviteEmailSubject` - Subject for invitation emails
+
+If not set, fallback subjects will display "TODO: Set your ... email subject in admin panel".
 
 ### Security Verification
 - [ ] KEK_B64 generated with `openssl rand -base64 32`
 - [ ] Started with test keys, verified everything works
 - [ ] All test keys replaced with production keys
 - [ ] Stripe live keys (start with sk_live_ and pk_live_)
-- [ ] Cloudflare Access configured (ACCESS_AUD available for future use)
+- [ ] Cloudflare Access configured (ACCESS_AUD and ACCESS_JWT_ISS set for JWT validation)
 - [ ] WAF rate limits active
 - [ ] Turnstile production keys configured
 - [ ] No .dev.vars or secrets in git

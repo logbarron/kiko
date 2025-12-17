@@ -22,35 +22,36 @@ SQLite database schema via Cloudflare D1 with envelope encryption for all PII fi
   - `registered_at`: Timestamp when guest completed registration (first login)
   - `created_at`, `updated_at`: Row timestamps
 
-**Encrypted Profile Schema**:
+**Encrypted Profile Schema** (`GuestProfile` in `src/types.ts`):
 ```typescript
 {
   email: string;
   party: Array<{
     personId: string;
-    role: 'primary' | 'companion' | 'child';
+    role: 'primary' | 'companion' | 'guest';  // No 'child' role
     firstName: string;
-    lastName?: string;
+    lastName: string;
     invitedEvents: string[];  // Event IDs
     attendance: {
       [eventId: string]: {
-        status: 'attending' | 'declined' | 'pending';
-        updatedAt: number;
+        status: 'yes' | 'no' | 'pending';
+        updatedAt: number | null;
         source: 'guest' | 'admin' | 'system';
       }
     };
     mealSelections?: { [eventId: string]: string };
-    dietaryNotes?: string;
+    dietaryNotes?: { [eventId: string]: string };  // Per-event notes
+    pendingMealSelections?: string[];
   }>;
   phone?: string;
   notes?: string;
-  dietary?: string;
   vip?: boolean;
   inviteToken?: string;
   inviteSentAt?: number;
   inviteClickedAt?: number;
   registeredAt?: number;
-  rsvp?: boolean;
+  magic_link_sent_at?: number;
+  rsvp?: RSVP;  // Object, not boolean
 }
 ```
 
@@ -116,25 +117,24 @@ SQLite database schema via Cloudflare D1 with envelope encryption for all PII fi
   - `enc_rsvp`: Encrypted JSON blob containing RSVP data
   - `updated_at`: Last update timestamp
 
-**Encrypted RSVP Schema**:
+**Encrypted RSVP Schema** (`RSVP` in `src/types.ts`):
 ```typescript
 {
   partyResponses: {
     [personId: string]: {
       events: {
         [eventId: string]: {
-          status: 'attending' | 'declined';
-          updatedAt: number;
-          source: 'guest';
+          status: 'yes' | 'no' | 'pending';
+          updatedAt: number | null;
+          source: 'guest' | 'admin' | 'system';
         }
       };
       mealSelections?: { [eventId: string]: string };
-      dietaryNotes?: string;
+      dietaryNotes?: { [eventId: string]: string };
+      pendingMealSelections?: string[];
     }
   };
-  dietary?: string;
-  notes?: string;
-  submittedAt?: number;
+  submittedAt?: string;  // ISO timestamp string
 }
 ```
 
@@ -151,42 +151,53 @@ SQLite database schema via Cloudflare D1 with envelope encryption for all PII fi
   - `enc_details`: Encrypted JSON blob containing event details
   - `updated_at`: Last update timestamp
 
-**Encrypted Event Schema**:
+**Encrypted Event Schema** (`EventDetails` in `src/types.ts`):
 ```typescript
 {
-  id: string;  // UUID
-  version: number;  // Schema version (current: 6)
+  schemaVersion?: number;  // Current: 6
   siteTitle: string;
+  heroHeadline?: string;
+  magicLinkEmailSubject?: string;
+  inviteEmailSubject?: string;
   dateISO: string;  // ISO 8601 date
   timeZone: string;  // IANA timezone
-  events: Array<{
-    eventId: string;
+  rsvpDeadlineISO?: string;
+  rsvpStatus?: { mode: 'open' | 'closed'; message?: string };
+  events?: Array<{
+    id: string;  // Event identifier (NOT eventId)
     label: string;
-    dateISO: string;
-    startTime: string;  // HH:MM
-    endTime?: string;
-    location: {
-      name: string;
-      address: string;
-      city: string;
-      state: string;
-      zip: string;
-      country: string;
+    startISO?: string;  // ISO 8601 datetime
+    endISO?: string;
+    capacity?: number;
+    venue?: {
+      name?: string;
+      address?: string[];  // Array of address lines
+      geo?: string;
+      mapUrl?: string;
     };
+    dressCode?: string;
+    photoPolicy?: string;
+    accessibility?: string;
+    transportation?: string;
+    foodNotes?: string;
+    requiresMealSelection?: boolean;
+    collectDietaryNotes?: boolean;
     mealOptions?: string[];
+    childPolicy?: string;
+    additionalNotes?: string;
   }>;
-  registryLinks?: Array<{ url: string; name: string }>;
-  accommodations?: {
-    hotelName: string;
-    address: string;
-    bookingUrl: string;
-  };
+  accommodations?: Array<{ name: string; address: string; discountCode?: string; notes?: string }>;
+  registry?: Array<{ label: string; url: string; description?: string }>;
+  localGuide?: { eat?: string; drink?: string; see?: string; do?: string };
+  transportationGuide?: { planes?: string; trains?: string; automobiles?: string };
+  ceremonyGuide?: { summary?: string; quickGuide?: string; stepByStep?: string; history?: string };
+  updatedAt?: number;
 }
 ```
 
 **Notes**:
 - Singleton enforced by `CHECK (id = 1)` constraint
-- Schema version tracks migrations (handled by `normalizeEventDetails`)
+- `schemaVersion` (not `version`) tracks migrations (handled by `normalizeEventDetails`)
 
 ---
 
@@ -198,15 +209,21 @@ SQLite database schema via Cloudflare D1 with envelope encryption for all PII fi
   - `type`: Event type string (e.g., `invite_sent`, `rsvp_submit`)
   - `created_at`: Event timestamp
 
-**Event Types**:
-- `invite_sent`: Invitation email sent to guest
-- `invite_clicked`: Guest clicked invite tracking link (future)
-- `invite_opened`: Guest opened invitation email (future)
-- `email_sent`: Group email sent to guest
-- `link_clicked`: Guest clicked tracking link in email (future)
+**Event Types** (examples, not exhaustive):
+- `email_sent`: Magic link email sent to guest
+- `link_clicked`: Guest clicked link
 - `verify_ok`: Magic link verified successfully
 - `verify_fail`: Magic link verification failed
 - `rsvp_submit`: RSVP submitted by guest
+- `invite_sent`: Invitation email sent (admin resend)
+- `invite_seeded`: Guest seeded via admin
+- `invite_clicked`: Guest clicked tracking link in invite
+- `event_visibility_updated`: Guest event visibility changed by admin
+- `event_attendance_updated`: Admin updated attendance
+- `guest_deleted`: Guest deleted
+- `event_updated`: Event configuration changed
+- `group_email_sent`: Admin bulk email sent (global event)
+- `contribution_completed`: Stripe contribution completed (from webhook)
 
 **Indexes**:
 - `idx_audit_type_time`: Query by event type and time range
@@ -226,9 +243,10 @@ SQLite database schema via Cloudflare D1 with envelope encryption for all PII fi
 **Schedule**: Nightly via cron (configured in `wrangler.cleanup.toml`)
 
 **Operations**:
-1. Delete sessions where `expires_at < now` OR `last_seen_at + idle_timeout < now`
-2. Delete magic links where `expires_at < now`
-3. Delete audit events older than 90 days (configurable)
+1. Delete magic links where `expires_at < now`
+2. Delete sessions where `expires_at < now`
+3. Delete idle sessions where `last_seen_at + idle_timeout < now`
+4. Delete audit events older than 90 days (hard-coded, not configurable)
 
 **Configuration**:
 - `wrangler.cleanup.toml`: Separate worker for scheduled jobs
@@ -239,7 +257,7 @@ SQLite database schema via Cloudflare D1 with envelope encryption for all PII fi
 - Invoked by cron trigger (e.g., `0 2 * * *` for 2 AM daily)
 
 **Error Handling**:
-- Logs errors but does not fail (retries next scheduled run)
+- Logs errors via `logError` then throws (propagates to Cloudflare)
 - Uses batch deletes for performance
 
 ---
@@ -255,7 +273,7 @@ SQLite database schema via Cloudflare D1 with envelope encryption for all PII fi
 4. Apply to production: `npm run migrate`
 
 **Schema Versioning**:
-- Event details include `version` field
+- Event details include `schemaVersion` field (not `version`)
 - `normalizeEventDetails` migrates legacy formats
 - Migrations applied on read (lazy migration)
 - Prompts admin to save if mutation detected
@@ -275,7 +293,8 @@ SQLite database schema via Cloudflare D1 with envelope encryption for all PII fi
 - AAD (Additional Authenticated Data) binds ciphertext to context
 
 **AAD Format**: `table:recordId:purpose`
-- Example: `guests:123:profile`
+- Example: `guests:<email_hash>:profile` (guests use email_hash as recordId)
+- Example: `event:1:details` (event table uses fixed id=1)
 - Prevents ciphertext reuse across tables/records/purposes
 
 **Key Rotation**:

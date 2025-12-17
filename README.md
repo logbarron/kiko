@@ -11,7 +11,7 @@ For video walk throughs and detailed information, read on my personal website: [
 
 - **Encrypted Data** – All PII encrypted using AES-GCM envelope encryption with AAD binding 
 - **Magic Link Authentication** – Passwordless guest login
-- **Server Side Rendered** – SSR with React hydration
+- **Server Side Rendered** – Guest pages are SSR + vanilla JS; admin mounts React
 - **Multi-Event RSVPs** – Guests manage multiple event RSVPs for each invited party
 - **Admin Portal** – (via Cloudflare Access) Send email invites & updates, manage guests, manage website content, metrics for all RSVP information
 - **Stripe Integration** – Stripe elements integration for gifting, never leave the page
@@ -22,7 +22,7 @@ This repository is the technical frame for a wedding/event site—**it ships wit
 
 - **Copy & data**: Guest list, event details, registry links, and admin content all start empty; you must provide the data after deploying your own D1 database.
 - **Images & branding**: Everything under `public/assets/` and `public/index.html` uses placeholder artwork. Replace them with your own media.
-- **Email + notifications**: Subjects and body copy in `src/lib/gmail.ts` are scaffolding only; update them to match your tone before emailing guests.
+- **Email + notifications**: Configure invite/magic-link subjects in the admin panel; customize templates in `src/lib/gmail.ts` as needed.
 - **Secrets & services**: No API keys are included. Configure Cloudflare, Stripe, Google Workspace, and API credentials yourself (follow the [production setup guide](docs/setup.md#production-setup-first-time)).
 
 ## Project Structure

@@ -24,7 +24,7 @@ React 19 components using Radix UI primitives and Tailwind CSS. All components a
 **Purpose**: Main admin dashboard container with tab navigation.
 
 **Key Features**:
-- **Tabs**: Guest Management, Event Configuration, Group Email, Audit Log
+- **Tabs**: Guests, Event (2 tabs total)
 - **State Management**: React hooks for guests, event details, audit events
 - **API Integration**: Fetches and updates data via `/admin/*` endpoints
 - **Error Handling**: Toast notifications for success/failure
@@ -42,13 +42,11 @@ React 19 components using Radix UI primitives and Tailwind CSS. All components a
 - `AlertDialog`: Confirmation dialogs for destructive actions
 
 **API Endpoints Used**:
-- `GET /admin/guests`: Fetch all guests
-- `POST /admin/guests`: Create new guest
-- `PUT /admin/guests`: Update guest profile
-- `DELETE /admin/guests`: Delete guest
+- `GET /admin/guests`: Fetch all guests with profiles and stats
+- `POST /admin/guests`: Multi-action handler (update, resend, updateEventVisibility, updateEventAttendance, updateMealSelection, delete)
 - `GET /admin/event`: Fetch event configuration
-- `PUT /admin/event`: Update event configuration
-- `POST /admin/invite`: Send invitation emails
+- `POST /admin/event`: Update event configuration
+- `POST /admin/invite`: Seed new guest with invitation
 - `POST /admin/group-email`: Send bulk emails
 - `GET /admin/audit`: Fetch audit log
 
@@ -63,7 +61,7 @@ React 19 components using Radix UI primitives and Tailwind CSS. All components a
 - **Search**: Filter guests by name or email
 - **Bulk Actions**: Send invitations to multiple guests
 - **Edit Modal**: Inline editing of guest profiles
-- **Party Members**: Add/remove party members (companion, children)
+- **Party Members**: Add/remove party members (companion, guest roles)
 - **Event Invitations**: Toggle which events each guest is invited to
 
 **Key State**:
@@ -130,15 +128,17 @@ React 19 components using Radix UI primitives and Tailwind CSS. All components a
 
 ### src/components/admin/ThemeToggle.tsx
 
-**Purpose**: Dark mode toggle button.
+**Purpose**: Dark mode toggle button for admin dashboard.
 
 **Key Features**:
+- Uses `next-themes` ThemeProvider for theme management
 - Persists theme preference to localStorage
-- Applies `.dark` class to `<html>` element
-- Uses `next-themes` for theme management
+- Applies `.dark` class to `<html>` element (via next-themes `attribute="class"`)
 - Icon changes based on theme (sun/moon)
 
-**Storage Key**: `theme` (values: `'light'`, `'dark'`, `'system'`)
+**Storage Key**: `admin-theme` (values: `'light'`, `'dark'`, `'system'`)
+
+Note: Guest pages use a separate theme system with `guest-theme` storage key and `body[data-theme]` attribute.
 
 ---
 
@@ -183,4 +183,5 @@ React 19 components using Radix UI primitives and Tailwind CSS. All components a
 **Dark Mode**:
 - CSS variables for theme colors
 - Applies dark variants via `dark:` Tailwind prefix
-- Theme toggle updates `html.dark` class
+- Admin: Theme toggle updates `html.dark` class (via next-themes)
+- Guest pages: Use `body[data-theme="dark"]` attribute (vanilla JS)

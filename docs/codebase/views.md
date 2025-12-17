@@ -1,15 +1,15 @@
 # Source Code - View Rendering
 
-Server-rendered HTML views for authenticated guests. Progressive enhancement strategy: works without JavaScript, enhances with React hydration.
+Server-rendered HTML views for authenticated guests and admin dashboard.
 
 ---
 
 ### View Architecture
 
-**Pattern**: Server-side rendering (SSR) with optional client-side hydration
+**Pattern**: Server-side rendering (SSR) with different hydration strategies
 - **SSR**: Functions return HTML strings with inline styles and scripts
-- **Progressive Enhancement**: Core functionality works without JavaScript
-- **Hydration**: React 19 hydrates interactive components when JS available
+- **Admin pages**: Full React 19 hydration via `enhance.js`
+- **Guest pages**: Vanilla JavaScript only (no React hydration)
 - **CSP Compliance**: All inline scripts use nonce-based CSP
 
 **File Structure**:
@@ -27,9 +27,9 @@ Server-rendered HTML views for authenticated guests. Progressive enhancement str
 **Key Features**:
 - `<html>` scaffold with meta tags, viewport, charset
 - CSP nonce injection for inline scripts/styles
-- Dark mode support via `html.dark` class
+- Dark mode flash prevention via inline script (reads `admin-theme` from localStorage)
+- Applies `dark` class to `<html>` element when theme is dark
 - Responsive design with mobile-first breakpoints
-- Preloads critical fonts and assets
 
 **Function**: `renderLayout(title, content, nonce, options)`
 
@@ -76,29 +76,29 @@ Server-rendered HTML views for authenticated guests. Progressive enhancement str
 **Purpose**: Main renderer for guest-facing event page.
 
 **Key Features**:
-- Server-rendered HTML with progressive enhancement
-- Tabs for event sections (hero, ceremony, reception, travel, registry, RSVP)
+- Server-rendered HTML with vanilla JavaScript interactions
+- Navigation with dropdowns for event sections
 - Theme-aware images (light/dark variants)
-- Inline JavaScript for tab navigation (works without React)
-- Optional React hydration for enhanced interactions
+- Inline JavaScript for navigation, scroll behavior, theme toggle
+- No React hydration - pure SSR with vanilla JS
 
-**Function**: `renderEventPage(guest, event, pendingMealSelections, nonce)`
+**Function**: `renderEventPage(view, nonce)`
 
 **Parameters**:
-- `guest`: Decrypted guest profile with party members
-- `event`: Decrypted event configuration
-- `pendingMealSelections`: Events needing meal selection
+- `view`: `EventPageViewModel` containing guest, event, and navigation data
 - `nonce`: CSP nonce
 
 **Output**: Complete HTML page with:
-- Navigation tabs
-- Event sections (hero, ceremony, reception, travel, registry, RSVP)
-- Inline styles (scoped to page)
-- Inline scripts (tab switching, theme toggle, RSVP submission)
+- Top navigation bar with dropdown menus
+- Event sections (hero, ceremony, schedule, travel, registry, RSVP)
+- Inline styles via `renderEventStyles`
+- Inline scripts via `renderEventScripts`
+- Theme toggle via `renderThemeScript`
 
-**Progressive Enhancement**:
-- **Without JS**: All content visible, no tab navigation (scroll-based)
-- **With JS**: Tab navigation, theme toggle, form validation, RSVP submission
+**Guest Page Behavior**:
+- Uses `guest-theme` localStorage key for theme persistence
+- Applies `data-theme` attribute to `<body>` element
+- No React - all interactions via vanilla JavaScript
 
 ---
 
@@ -112,7 +112,7 @@ Server-rendered HTML views for authenticated guests. Progressive enhancement str
 - Formatted date with timezone
 - Welcome message
 
-**Function**: `renderHero(event)`
+**Function**: `renderHeroSection(view)`
 
 **Output**: HTML string for hero section
 
@@ -129,7 +129,7 @@ Server-rendered HTML views for authenticated guests. Progressive enhancement str
 - Google Maps link
 - Theme-aware image
 
-**Function**: `renderCeremony(event)`
+**Function**: `renderCeremonySection(view)`
 
 **Output**: HTML string for ceremony section
 
@@ -149,7 +149,7 @@ Server-rendered HTML views for authenticated guests. Progressive enhancement str
 - Google Maps link
 - Theme-aware image
 
-**Function**: `renderSchedule(event)`
+**Function**: `renderScheduleSection(view)`
 
 **Output**: HTML string for schedule section
 
@@ -163,16 +163,16 @@ Server-rendered HTML views for authenticated guests. Progressive enhancement str
 **Purpose**: Renders travel/accommodations section.
 
 **Key Features**:
-- Hotel name and address
-- Booking URL link
-- Theme-aware image
+- Collapsible cards for Hotels, Transportation, and Local Guide
+- Renders rich-text content from `EventDetails` (addresses, discount codes, notes)
+- Theme-aware header image
 
-**Function**: `renderTravel(accommodations)`
+**Function**: `renderTravelSection(view)`
 
 **Output**: HTML string for travel section
 
 **Notes**:
-- Only renders if `accommodations` object exists in event configuration
+- Only renders when `view.navigation.showTravel` is true and at least one of `view.accommodations`, `view.transportationGuide`, or `view.localGuide` has content.
 
 ---
 
@@ -181,17 +181,17 @@ Server-rendered HTML views for authenticated guests. Progressive enhancement str
 **Purpose**: Renders gift registry section.
 
 **Key Features**:
-- List of registry links (URL + name)
+- List of registry items (label + URL + optional description)
 - Opens links in new tab (`target="_blank"`)
 - Theme-aware image
-- Optional Stripe honeymoon fund link
+- Includes Stripe honeymoon fund widget (requires Stripe keys to work)
 
-**Function**: `renderRegistry(registryLinks)`
+**Function**: `renderRegistrySection(view)`
 
 **Output**: HTML string for registry section
 
 **Notes**:
-- Only renders if `registryLinks` array exists in event configuration
+- Only renders when `view.navigation.showRegistry` is true and `view.registry` has at least one item.
 
 ---
 
@@ -200,30 +200,24 @@ Server-rendered HTML views for authenticated guests. Progressive enhancement str
 **Purpose**: Renders RSVP form with attendance and meal selection.
 
 **Key Features**:
-- Radio buttons for attending/declined per person per event
-- Meal selection dropdowns (conditionally shown)
-- Dietary notes textarea per person
-- General notes textarea
-- Submit button with loading state
-- Success/error messages
+- Per-attendee Accept/Decline controls for each invited event
+- Optional meal selection controls when `requiresMealSelection` is true (radio pills from `mealOptions`, otherwise freeform input)
+- Optional per-attendee dietary notes (toggled, per event, when `collectDietaryNotes` is true)
+- Auto-saves changes via `/rsvp` (AJAX) and reports status in `#rsvp-status`
 
-**Function**: `renderRsvp(guest, event, pendingMealSelections, nonce)`
+**Function**: `renderRsvpSection(view)`
 
-**Output**: HTML string for RSVP form with inline script
+**Output**: HTML string for RSVP timeline section with `<form id="rsvp-form">`
 
-**Inline JavaScript** (CSP-compliant with nonce):
-- Form validation
-- Conditional meal selection visibility
-- AJAX submission to `/rsvp` endpoint
-- Success/error toast notifications
-- Loading state management
+**Client Behavior** (implemented in `src/views/event/scripts/interactions.ts` via `renderEventScripts`):
+- Serializes the form state into the hidden `partyResponses` JSON field and POSTs to `/rsvp`
+- Auto-saves on attendance changes (`data-auto-save="true"`) and meal/dietary updates
+- Displays success/error messages in `#rsvp-status`
 
 **Progressive Enhancement**:
-- **Without JS**: Form submits via standard POST (fallback)
-- **With JS**: AJAX submission with validation and feedback
+- Guest pages render without React, but RSVP submission requires JavaScript (the server expects the `partyResponses` JSON payload).
 
 **Validation**:
-- Attendance status required per person per event
 - Meal selection required if attending event with meals
 - Dietary notes optional
 
@@ -231,23 +225,29 @@ Server-rendered HTML views for authenticated guests. Progressive enhancement str
 
 ### src/views/event/components/navigation.ts
 
-**Purpose**: Renders tab navigation bar.
+**Purpose**: Renders navigation bar with dropdown menus.
 
 **Key Features**:
-- Tabs for each section (Hero, Ceremony, Reception, Travel, Registry, RSVP)
-- Active tab highlighting
-- Sticky navigation on scroll
+- Navigation links for each visible section
+- Dropdown menus for schedule and travel sub-sections
 - Theme toggle button
-- Tab IDs match section IDs for deep linking
+- Mobile-responsive hamburger menu
+- Scroll-to-section behavior via `data-scroll-target` attributes
 
-**Function**: `renderNavigation(tabs, activeTab)`
+**Function**: `renderNavigation(view)`
 
-**Output**: HTML string for navigation bar
+**Parameters**:
+- `view`: `EventPageViewModel` with navigation visibility flags
 
-**Inline JavaScript** (in main view):
-- Tab click handlers
-- Active tab state management
-- Scroll-to-section behavior
+**Output**: HTML string for navigation bar with anchor links and dropdowns
+
+**Navigation Items** (conditionally rendered):
+- Ceremony (if ceremony tabs exist)
+- Schedule (dropdown with event sub-items)
+- Travel (dropdown with hotels, transportation, local guide)
+- Registry (if registry content exists)
+- RSVP (if showRsvp is true)
+- Theme toggle button
 
 ---
 
@@ -260,16 +260,26 @@ Server-rendered HTML views for authenticated guests. Progressive enhancement str
 - Light image for light mode
 - Dark image for dark mode
 - Fallback `<img>` for browsers without `<picture>` support
+- Adds `data-theme-*` attributes so the guest theme script can swap images when users toggle theme
 
-**Function**: `renderThemePicture(lightSrc, darkSrc, alt, className?)`
+**Function**: `renderThemePicture(options)`
+
+**Required Options**:
+- `lightSrc`, `darkSrc`, `alt`
 
 **Output**: HTML string for `<picture>` element
 
 **Example**:
 ```html
-<picture>
-  <source srcset="/assets/dark/hero.webp" media="(prefers-color-scheme: dark)">
-  <img src="/assets/light/hero.webp" alt="Hero" class="...">
+<picture data-theme-picture>
+  <source srcset="/assets/dark/herodark.webp" media="(prefers-color-scheme: dark)" type="image/webp" data-theme-source>
+  <img
+    src="/assets/light/hero.webp"
+    alt="Hero"
+    data-theme-image
+    data-theme-light="/assets/light/hero.webp"
+    data-theme-dark="/assets/dark/herodark.webp"
+  >
 </picture>
 ```
 
@@ -285,22 +295,22 @@ Server-rendered HTML views for authenticated guests. Progressive enhancement str
 - Venue information with Google Maps link
 - Theme-aware image via `renderThemePicture`
 
-**Function**: `renderTimelineSection(event, lightImage, darkImage)`
+**Function**: `renderTimelineSection({ id, title, body, eyebrow?, summary?, align?, headerMedia? })`
 
-**Output**: HTML string for event section
+**Output**: HTML string for a collapsible timeline section (toggle button + content)
 
-**Used By**: `renderCeremony`, `renderSchedule`
+**Used By**: `renderCeremonySection`, `renderScheduleSection`, `renderTravelSection`, `renderRegistrySection`, `renderRsvpSection`
 
 ---
 
 ### src/views/event/components/tab-ids.ts
 
-**Purpose**: Constants for tab and section IDs.
+**Purpose**: Generates sanitized tab and panel IDs.
 
 **Exports**:
-- `TAB_IDS`: Object mapping tab names to IDs (e.g., `hero`, `ceremony`, `rsvp`)
+- `buildTabIds(prefix, value)`: Returns `{ tabId, panelId }` with sanitized IDs
 
-**Usage**: Ensures consistent IDs across navigation and sections
+**Usage**: Generates consistent, safe IDs for tab/panel pairs (e.g., `schedule-tab-event1`, `schedule-panel-event1`)
 
 ---
 
@@ -310,13 +320,13 @@ Server-rendered HTML views for authenticated guests. Progressive enhancement str
 
 **Key Features**:
 - Scoped styles for event page components
-- Tab navigation styles
+- Navigation and dropdown styles
 - Section layout styles
 - Form styles
 - Responsive breakpoints
-- Dark mode support via `html.dark` selector
+- Dark mode support via `body[data-theme="dark"]` selector
 
-**Function**: `getEventStyles(nonce)`
+**Function**: `renderEventStyles(nonce, fonts)`
 
 **Output**: `<style nonce="...">` tag with CSS
 
@@ -327,32 +337,34 @@ Server-rendered HTML views for authenticated guests. Progressive enhancement str
 **Purpose**: Inline JavaScript for event page interactions.
 
 **Key Features**:
-- Tab navigation (click to switch tabs)
-- Active tab highlighting
-- Theme toggle (persists to localStorage)
+- Navigation dropdown toggle behavior
+- Mobile hamburger menu toggle
+- Scroll-to-section on navigation click
+- Top bar visibility on scroll
 - RSVP form submission (AJAX)
 - Form validation
 - Success/error handling
 
-**Function**: `getEventScripts(nonce)`
+**Function**: `renderEventScripts(nonce)`
 
 **Output**: `<script nonce="...">` tag with JavaScript
 
 **CSP Compliance**: All inline scripts use nonce from middleware
 
+Note: Theme toggle is handled separately by `renderThemeScript` from `src/views/shared/themeToggle.ts`
+
 ---
 
 ### src/views/event/view-models.ts
 
-**Purpose**: Transforms database models into view-friendly formats.
+**Purpose**: Type definitions for the guest event page view model.
 
-**Key Functions**:
-- `buildGuestViewModel(guest)`: Formats guest data for templates
-- `buildEventViewModel(event)`: Formats event data for templates
-- `formatDateTime(date, time, timezone)`: Formats date/time strings
-- `buildGoogleMapsUrl(address)`: Generates Google Maps link
+**Key Exports**:
+- `EventPageViewModel`: Top-level shape consumed by `renderEventPage`
+- `EventEntryViewModel`, `EventAttendeeViewModel`: Per-event schedule/attendee shapes
 
-**Used By**: `renderEventPage` to transform API data before rendering
+**Built By**:
+- `functions/event.ts` builds the view model (`buildEventViewModel(...)`) before calling `renderEventPage(...)`.
 
 ---
 
@@ -362,7 +374,6 @@ Server-rendered HTML views for authenticated guests. Progressive enhancement str
 
 **Key Functions**:
 - `escapeHtml(text)`: Escapes `<`, `>`, `&`, `"`, `'`
-- `escapeAttribute(value)`: Escapes for HTML attribute context
 
 **Used By**: All view rendering functions to sanitize user input
 
@@ -377,12 +388,15 @@ Server-rendered HTML views for authenticated guests. Progressive enhancement str
 **Purpose**: Converts plain text with Markdown-like syntax to HTML.
 
 **Key Features**:
-- Converts URLs to `<a>` tags
-- Converts newlines to `<br>` tags
+- Converts URLs and Markdown links to `<a>` tags
+- Supports lightweight formatting (bold/emphasis/highlight/code) with HTML escaping
+- Supports lists and paragraphs for block rendering
 - Preserves spacing and formatting
-- Escapes HTML entities before processing
+- Escapes HTML entities before processing to prevent injection
 
-**Function**: `richTextToHtml(text)`
+**Key Functions**:
+- `renderRichTextBlock(input)`: Block-safe HTML (paragraphs, lists)
+- `renderRichTextInline(input)`: Inline-safe HTML (no wrapping blocks)
 
 **Used By**: Event description rendering, notes fields
 
@@ -390,28 +404,34 @@ Server-rendered HTML views for authenticated guests. Progressive enhancement str
 
 ### src/views/event/utils/sanitize-toggle-label.ts
 
-**Purpose**: Sanitizes user-provided tab labels for display.
+**Purpose**: Normalizes user-provided labels into plain text for toggles and accessibility.
 
 **Key Functions**:
-- `sanitizeToggleLabel(label)`: Removes special characters, limits length
-- Prevents tab injection attacks
+- `sanitizeToggleLabel(source)`: Strips lightweight formatting and collapses whitespace
 
-**Used By**: Tab navigation rendering
+**Used By**: Schedule and travel toggle labels (button text, ARIA)
 
 ---
 
 ### src/views/shared/themeToggle.ts
 
-**Purpose**: Shared theme toggle component for all pages.
+**Purpose**: Shared theme toggle component for guest pages.
 
 **Key Features**:
-- Sun/moon icon toggle
+- Sun/moon icon toggle button
 - Persists theme to localStorage
-- Applies `.dark` class to `<html>` element
+- Applies `data-theme` attribute to target element (body or documentElement)
 - Works without React (vanilla JavaScript)
+- Dispatches `themechange` custom event
+- Respects system preference when no manual preference set
 
-**Function**: `renderThemeToggle(nonce)`
+**Functions**:
+- `renderThemeToggle()`: Returns HTML for the toggle button
+- `renderThemeScript(nonce, options)`: Returns inline script for theme behavior
 
-**Output**: HTML button with inline script
+**Options**:
+- `storageKey`: localStorage key (default: `'guest-theme'`)
+- `customEventName`: Event name to dispatch (default: `'themechange'`)
+- `target`: Where to apply data-theme - `'body'` (default) or `'documentElement'`
 
-**Storage Key**: `theme` (values: `'light'`, `'dark'`)
+**Output**: HTML button + `<script nonce="...">` tag with theme logic

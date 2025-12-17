@@ -40,22 +40,26 @@ manifest-src 'self'
 
 ### functions/invite.ts
 
-**Purpose**: Generates magic link and sends invitation email to guest.
+**Purpose**: Renders invite landing page (GET) or sends magic link email (POST).
 
-**Method**: POST
+**Methods**: GET, POST
 
 **Authentication**: None (public endpoint, rate-limited)
+
+**GET /invite**:
+- Renders HTML landing page with email form and Turnstile CAPTCHA
+- Supports tracking token `?t=<token>` to record `invite_clicked` audit event
+
+**POST /invite**:
 
 **Rate Limits**:
 - `INVITES_PER_EMAIL_PER_HOUR`: Max invites per email address
 - `INVITES_PER_IP_PER_10MIN`: Max invites per IP address
 
-**Request Body**:
-```typescript
-{
-  email: string;           // Guest email address
-  "cf-turnstile-response": string;  // CAPTCHA token
-}
+**Request Body** (multipart/form-data):
+```
+email: string              // Guest email address
+cf-turnstile-response: string  // CAPTCHA token
 ```
 
 **Flow**:
@@ -65,15 +69,15 @@ manifest-src 'self'
 4. Generate 32-byte magic link token
 5. Store token hash in `magic_links` table with TTL
 6. Send email via Gmail API with magic link URL
-7. Record `invite_sent` audit event
+7. Record `email_sent` audit event
 8. Update `invite_sent_at` timestamp on guest record
 
 **Response**:
-- 200: `{ success: true }`
-- 400: Missing fields or already registered
-- 429: Rate limit exceeded
-- 404: Email not in guest list
-- 500: Server error
+- Returns HTML page (success message or error)
+- 400: Missing fields or already registered (HTML)
+- 429: Rate limit exceeded (HTML)
+- 404: Email not in guest list (HTML)
+- 500: Server error (HTML)
 
 **Security**:
 - Tokens stored as HMAC-SHA256 hashes only
@@ -137,7 +141,7 @@ manifest-src 'self'
 **Authentication**: Session cookie required
 
 **Flow**:
-1. Validate session cookie from `__Host-s` cookie
+1. Validate session cookie (`__Host-s` in production, `s` in dev mode)
 2. Check session not expired (idle timeout OR absolute timeout)
 3. Update `last_seen_at` timestamp (idle timeout refresh)
 4. Lookup guest by ID from session
@@ -146,58 +150,63 @@ manifest-src 'self'
 7. Decrypt event details from `enc_details` blob
 8. Normalize attendance records (ensure all invited events present)
 9. Compute pending meal selections (events needing meals)
-10. Return SSR HTML or JSON based on `Accept` header
+10. Build view model and return SSR HTML
 
-**Response (JSON)**:
+**Response**:
+- Always returns HTML (server-rendered event page)
+- CSP nonce injected for inline scripts
+- Guest pages use vanilla JS theme toggle (no React hydration)
+
+**Data Structures** (used internally for view model):
+
+Guest profile:
 ```typescript
 {
-  guest: {
-    id: number;
-    email: string;
-    party: Array<{
-      personId: string;
-      role: string;
-      firstName: string;
-      lastName: string;
-      invitedEvents: string[];
-      attendance: { [eventId]: { status, updatedAt, source } };
-      mealSelections?: { [eventId]: string };
-      dietaryNotes?: string;
-    }>;
-  };
-  event: {
-    id: string;
-    version: number;
-    siteTitle: string;
-    dateISO: string;
-    timeZone: string;
-    events: Array<{
-      eventId: string;
-      label: string;
-      dateISO: string;
-      startTime: string;
-      endTime?: string;
-      location: { name, address, city, state, zip, country };
-      mealOptions?: string[];
-    }>;
-    registryLinks?: Array<{ url, name }>;
-    accommodations?: { hotelName, address, bookingUrl };
-  };
-  pendingMealSelections: Array<{ eventId, personId, eventLabel }>;
+  party: Array<{
+    personId: string;
+    role: 'primary' | 'companion' | 'guest';
+    firstName: string;
+    lastName: string;
+    invitedEvents: string[];
+    attendance: {
+      [eventId: string]: {
+        status: 'yes' | 'no' | 'pending';
+        updatedAt: number | null;
+        source: 'guest' | 'admin' | 'system';
+      };
+    };
+    mealSelections?: { [eventId: string]: string };
+    dietaryNotes?: { [eventId: string]: string };
+  }>;
 }
 ```
 
-**Response (HTML)**:
-- Server-rendered React shell with event data
-- CSP nonce injected for inline scripts
-- Progressive enhancement: hydrates with React 19 if JavaScript enabled
+Event details:
+```typescript
+{
+  schemaVersion: number;       // Current: 6
+  siteTitle: string;
+  dateISO: string;
+  timeZone: string;
+  events: Array<{
+    id: string;                // Event identifier
+    label: string;
+    startISO?: string;
+    endISO?: string;
+    venue?: { name, address[], geo, mapUrl };
+    mealOptions?: string[];
+  }>;
+  registry?: Array<{ label, url, description }>;
+  accommodations?: Array<{ name, address, discountCode, notes }>;
+}
+```
 
 **Security**:
 - Session validation on every request
 - Idle timeout enforced (default 30 minutes)
 - Absolute timeout enforced (default 12 hours)
 - Guest can only access their own profile (session binds guest ID)
-- Decryption uses AAD binding (table: `guests`, recordId: guest_id, purpose: `profile`)
+- Decryption uses AAD binding (table: `guests`, recordId: email_hash, purpose: `profile`)
 
 **Error Responses**:
 - 401: Invalid/expired session (redirects to `/` with login prompt)
@@ -213,41 +222,42 @@ manifest-src 'self'
 
 **Authentication**: Session cookie required
 
-**Request Body**:
+**Request Body** (multipart/form-data):
+```
+partyResponses: string  // JSON-encoded object:
+```
+
 ```typescript
+// partyResponses JSON structure:
 {
-  partyResponses: {
-    [personId: string]: {
-      events: {
-        [eventId: string]: {
-          status: 'attending' | 'declined';
-          updatedAt: number;
-          source: 'guest';
-        }
-      };
-      mealSelections?: { [eventId: string]: string };
-      dietaryNotes?: string;
-    }
-  };
-  dietary?: string;
-  notes?: string;
+  [personId: string]: {
+    events: {
+      [eventId: string]:
+        | 'yes' | 'no' | 'pending'
+        | { status: 'yes' | 'no' | 'pending' };
+    };
+    mealSelections?: { [eventId: string]: string };
+    dietaryNotes?: { [eventId: string]: string };
+  }
 }
 ```
 
 **Flow**:
 1. Validate session cookie
 2. Verify session not expired
-3. Lookup guest by session guest_id
-4. Decrypt guest profile
-5. Validate RSVP data (Zod schema)
-6. Verify person IDs match guest party members
-7. Verify event IDs exist in event configuration
-8. Validate meal selections (must match event's `mealOptions`)
-9. Update guest profile with new attendance records
-10. Encrypt updated profile
-11. Upsert RSVP record with encrypted RSVP data
-12. Record `rsvp_submit` audit event
-13. Return success response
+3. Check rate limit (guest ID + client IP)
+4. Check if RSVPs are open (returns 423 if closed)
+5. Lookup guest by session guest_id
+6. Decrypt guest profile
+7. Parse `partyResponses` from form data
+8. Verify person IDs match guest party members
+9. Verify event IDs exist in event configuration
+10. Validate meal selections (must match event's `mealOptions`)
+11. Update guest profile with new attendance records
+12. Encrypt updated profile
+13. Upsert RSVP record with encrypted RSVP data
+14. Record `rsvp_submit` audit event
+15. Return JSON response with pending meal events (event IDs)
 
 **Rate Limit**:
 - `RSVP_SUBMISSIONS_PER_10MIN` (default: 20 submissions per 10 minutes, keyed by guest ID + client IP)
@@ -255,27 +265,28 @@ manifest-src 'self'
 **Validation Rules**:
 - All person IDs must belong to guest's party
 - All event IDs must exist in event configuration
-- Meal selections required if event has `mealOptions` and status is `attending`
+- Meal selections required if event has `requiresMealSelection` and status is `yes`
 - Meal selection must be one of event's `mealOptions`
-- Cannot select meal if status is `declined`
+- Cannot select meal if status is `no`
 
 **Response**:
-- 200: `{ success: true }`
-- 400: Validation error (missing fields, invalid meal selection, etc.)
-- 401: Invalid/expired session
-- 500: Server error
+- 200: `{ success: true, pendingMealEvents: string[] }`
+- 401: `Unauthorized`
+- 423: `{ success: false, error: string, code: 'RSVP_CLOSED' }`
+- 429: `{ success: false, error: string, code: 'RSVP_RATE_LIMIT' }`
+- 500: `An error occurred`
 
 **Security**:
 - Guest can only RSVP for their own party
 - Meal selection validation prevents injection of arbitrary values
 - Encrypted RSVP data uses AAD binding (table: `rsvps`, recordId: guest_id, purpose: `rsvp`)
-- Timestamp validation ensures updatedAt is present and recent
+- Server sets attendance `updatedAt` and `source` values (client cannot spoof)
 
 ---
 
 ### functions/admin/index.ts
 
-**Purpose**: Serves admin dashboard with guest list, event config, and audit logs.
+**Purpose**: Serves admin dashboard SSR shell.
 
 **Method**: GET
 
@@ -284,145 +295,142 @@ manifest-src 'self'
 **Flow**:
 1. Validate Cloudflare Access JWT from `CF-Access-Jwt-Assertion` header
 2. Verify JWT signature, audience, issuer, expiration
-3. Extract admin email from JWT claims
-4. Fetch all guests from database
-5. Decrypt all guest profiles
-6. Fetch RSVP records and decrypt
-7. Fetch event configuration and decrypt
-8. Fetch recent audit events
-9. Compute stats (total guests, attending, declined, pending)
-10. Return SSR HTML with admin dashboard
+3. Render SSR HTML shell with CSP nonce
+4. Return HTML (React app fetches data client-side via API endpoints)
 
 **Response (HTML)**:
-- Server-rendered React admin dashboard
-- Tabs: Guest Management, Event Configuration, Group Email, Audit Log
+- Server-rendered HTML shell for React admin dashboard
+- Tabs: Guests, Event (2 tabs total)
+- React app mounts and fetches data from `/admin/guests`, `/admin/event`, `/admin/audit` APIs
 - CSP nonce injected for inline scripts
 
 **Security**:
 - Requires valid Cloudflare Access JWT (enforced by Cloudflare Access application)
 - JWT signature verified with Cloudflare Access public keys (JWKS)
-- Admin email logged in audit events
-- Access to all guest data (PII) - admin privilege required
+- Access to admin dashboard - admin privilege required
 
 **Dev Mode**:
-- If `DEV_MODE=true`, bypasses Access validation and returns mock admin email
+- If `DEV_MODE=true`, bypasses Access validation
 
 **Error Responses**:
 - 401: Invalid/expired JWT
-- 503: Cloudflare Access not configured
+- 503: Cloudflare Access not configured (ACCESS_AUD or ACCESS_JWT_ISS missing)
 - 500: Server error
 
 ---
 
 ### functions/admin/guests.ts
 
-**Purpose**: CRUD operations for guest list (add, update, delete guests).
+**Purpose**: Guest list operations with multi-action POST handler.
 
-**Methods**: GET, POST, PUT, DELETE
+**Methods**: GET, POST
 
 **Authentication**: Cloudflare Access JWT required
 
 **GET /admin/guests**:
 - Returns all guests with decrypted profiles
-- Includes RSVP status and attendance summaries
+- Includes RSVP status, attendance summaries, audit summaries, and magic link stats
 
 **POST /admin/guests**:
-- Creates new guest with encrypted profile
-- Generates email hash
-- Returns created guest with ID
+Multi-action handler based on `action` field:
 
-**PUT /admin/guests**:
-- Updates guest profile (party members, invited events, etc.)
-- Re-encrypts profile with new data
-- Validates person IDs are unique
+| Action | Description |
+|--------|-------------|
+| `update` | Update guest profile (notes, phone, vip, allowPlusOne) |
+| `resend` | Resend invitation email to guest |
+| `updateEventVisibility` | Update which events guest is invited to |
+| `updateEventAttendance` | Update attendance status for an event |
+| `updateMealSelection` | Update meal selection for an event |
+| `delete` | Delete guest record |
 
-**DELETE /admin/guests**:
-- Deletes guest and cascades to related records (sessions, magic_links, rsvps, audit_events)
-- Returns success response
-
-**Request Body (POST/PUT)**:
+**Request Body (POST)**:
 ```typescript
 {
-  id?: number;  // Required for PUT
-  email: string;
-  party: Array<{
-    personId: string;
-    role: 'primary' | 'companion' | 'child';
-    firstName: string;
-    lastName?: string;
-    invitedEvents: string[];
-    attendance?: { [eventId]: { status, updatedAt, source } };
-  }>;
-  phone?: string;
-  notes?: string;
-  vip?: boolean;
+  action: 'update' | 'resend' | 'updateEventVisibility' | 'updateEventAttendance' | 'updateMealSelection' | 'delete';
+  guestId: number;
+  updates?: { notes?: string; phone?: string; vip?: boolean; allowPlusOne?: boolean };
+  visibility?: { [eventId: string]: boolean };
+  attendance?: { eventId: string; status: 'yes' | 'no' | 'pending'; personId?: string };
+  meal?: { eventId: string; personId: string; mealKey: string | null };
 }
 ```
 
-**Validation**:
-- Email must be valid format
-- Person IDs must be unique within party
-- Invited events must exist in event configuration
-- Primary role required for household head
+**Party Member Schema**:
+```typescript
+{
+  personId: string;
+  role: 'primary' | 'companion' | 'guest';  // No 'child' role
+  firstName: string;
+  lastName: string;
+  invitedEvents: string[];
+  attendance: {
+    [eventId: string]: {
+      status: 'yes' | 'no' | 'pending';
+      updatedAt: number | null;
+      source: 'guest' | 'admin' | 'system';
+    };
+  };
+}
+```
 
 **Security**:
 - Admin-only endpoint (Cloudflare Access enforced)
 - Encrypts all PII fields
-- Uses AAD binding (table: `guests`, recordId: guest_id, purpose: `profile`)
+- Uses AAD binding (table: `guests`, recordId: email_hash, purpose: `profile`)
 
 ---
 
 ### functions/admin/event.ts
 
-**Purpose**: CRUD operations for event configuration (singleton record).
+**Purpose**: Event configuration operations (singleton record).
 
-**Methods**: GET, POST, PUT
+**Methods**: GET, POST
 
 **Authentication**: Cloudflare Access JWT required
 
 **GET /admin/event**:
 - Returns decrypted event configuration from singleton row (id=1)
+- Creates empty event record if none exists
 
 **POST /admin/event**:
-- Creates event configuration (only if none exists)
+- Creates or updates event configuration
 - Validates and normalizes event data
 - Encrypts and stores in database
-
-**PUT /admin/event**:
-- Updates existing event configuration
-- Re-validates and normalizes
-- Handles schema migrations (version bumps)
+- Records `event_updated` audit event
 
 **Request Body**:
 ```typescript
 {
-  id: string;              // UUID
-  version: number;         // Schema version (current: 6)
+  schemaVersion?: number;      // Server normalizes to 6
   siteTitle: string;
-  dateISO: string;         // ISO 8601 date
-  timeZone: string;        // IANA timezone
+  heroHeadline?: string;
+  magicLinkEmailSubject?: string;
+  inviteEmailSubject?: string;
+  dateISO: string;             // ISO 8601 date
+  timeZone: string;            // IANA timezone
+  rsvpDeadlineISO?: string;
+  rsvpStatus?: { mode: 'open' | 'closed'; message?: string };
   events: Array<{
-    eventId: string;
+    id: string;                // Event identifier (not eventId)
     label: string;
-    dateISO: string;
-    startTime: string;     // HH:MM format
-    endTime?: string;
-    location: {
-      name: string;
-      address: string;
-      city: string;
-      state: string;
-      zip: string;
-      country: string;
+    startISO?: string;         // ISO 8601 datetime
+    endISO?: string;
+    capacity?: number;
+    venue?: {
+      name?: string;
+      address?: string[];
+      geo?: string;
+      mapUrl?: string;
     };
+    dressCode?: string;
+    requiresMealSelection?: boolean;
     mealOptions?: string[];
   }>;
-  registryLinks?: Array<{ url: string; name: string }>;
-  accommodations?: {
-    hotelName: string;
-    address: string;
-    bookingUrl: string;
-  };
+  accommodations?: Array<{ name: string; address: string; discountCode?: string; notes?: string }>;
+  registry?: Array<{ label: string; url: string; description?: string }>;
+  localGuide?: { eat?: string; drink?: string; see?: string; do?: string };
+  transportationGuide?: { planes?: string; trains?: string; automobiles?: string };
+  ceremonyGuide?: { summary?: string; quickGuide?: string; stepByStep?: string; history?: string };
 }
 ```
 
@@ -430,21 +438,19 @@ manifest-src 'self'
 - Date validation: ISO 8601 format
 - Timezone validation: IANA timezone database
 - URL validation: HTTP/HTTPS only
-- Time validation: HH:MM format
-- Event IDs must be unique
-- Generates UUID if missing
+- Event labels required
+- Events must have `startISO`
 
 **Security**:
 - Admin-only endpoint
 - Encrypts all event data
 - Uses AAD binding (table: `event`, recordId: `1`, purpose: `details`)
-- Returns `{ details, didMutate }` to indicate if normalization changed data
 
 ---
 
 ### functions/admin/invite.ts
 
-**Purpose**: Sends invitation email to one or more guests (admin-triggered).
+**Purpose**: Creates a new guest record (and optionally sends the initial invitation email).
 
 **Method**: POST
 
@@ -453,41 +459,45 @@ manifest-src 'self'
 **Request Body**:
 ```typescript
 {
-  guestIds: number[];       // Array of guest IDs to invite
-  subjectOverride?: string; // Custom email subject
+  primaryGuest: { firstName: string; lastName: string; email: string };
+  companion?: { firstName?: string; lastName?: string };
+  allowPlusOne?: boolean;                    // Adds a placeholder 'guest' party member
+  eventVisibility?: Record<string, boolean>; // Event ID -> invited?
+  sendEmail?: boolean;                       // Default: true
 }
 ```
 
 **Flow**:
 1. Validate Cloudflare Access JWT
-2. Lookup guests by IDs
-3. For each guest:
-   - Decrypt guest profile
-   - Generate magic link token
-   - Store token hash in `magic_links` table
+2. Load current event summaries (for validating `eventVisibility` IDs)
+3. Validate required fields and normalize email
+4. Reject if guest already exists (409)
+5. Build party members (primary + optional companion or placeholder guest)
+6. Generate invite tracking token and store `invite_token_hash`
+7. Encrypt and insert the guest profile
+8. If `sendEmail`:
+   - Build tracking URL: `/invite?t=<inviteToken>`
+   - Read `EventDetails.inviteEmailSubject` (optional)
    - Send invitation email via Gmail API
    - Record `invite_sent` audit event
-   - Update `invite_sent_at` timestamp
-4. Return summary of sent invitations
+9. If `sendEmail` is false: record `invite_seeded` audit event
+10. Return JSON with the new guest ID
 
 **Response**:
 ```typescript
 {
   success: true;
-  sent: number;  // Count of emails sent
+  guestId: number;
+  message: string;
 }
 ```
 
-**Email Template**:
-- Personalized greeting (builds party member names)
-- Magic link button
-- Expiration warning (10 minutes default)
-- Inline header image (base64-encoded)
+**Notes**:
+- Resending an invitation for an existing guest is handled by `POST /admin/guests` with `action: 'resend'`.
 
 **Security**:
 - Admin-only endpoint
-- Generates unique token per invitation
-- Tokens single-use and time-limited
+- Encrypts all PII fields
 
 ---
 
@@ -502,122 +512,130 @@ manifest-src 'self'
 **Request Body**:
 ```typescript
 {
-  guestIds: number[];  // Array of guest IDs to email
-  subject: string;     // Email subject
-  body: string;        // Plain text email body
+  subject: string;                    // Email subject
+  body: string;                       // Plain text email body
+  recipientMode: 'filter' | 'custom'; // Selection mode
+  recipientEventFilter?: string;      // Event ID or 'all' (for filter mode)
+  recipientStatusFilter?: string;     // 'all' | 'has-email' | 'accepted' | 'pending' | 'declined' | 'invited'
+  recipientCustomIds?: number[];      // Guest IDs (for custom mode)
 }
 ```
 
 **Flow**:
 1. Validate Cloudflare Access JWT
-2. Lookup guests by IDs
+2. Resolve recipients based on mode (filter or custom IDs)
 3. Decrypt guest profiles to get email addresses
-4. Send email via Gmail API with generic template
-5. Record `email_sent` audit event for each recipient
-6. Return summary of sent emails
+4. Send individual emails via Gmail API (500ms delay between sends)
+5. Record `group_email_sent` audit event (single event, not per recipient)
+6. Return summary of sent/failed emails
 
 **Response**:
 ```typescript
-{
-  success: true;
-  sent: number;
-}
-```
+// Success (all sent):
+{ success: true; emailsSent: number }
 
-**Email Template**:
-- Generic layout with custom subject and body
-- Plain text + HTML multipart
-- No tracking or personalization
+// Partial success (status 207):
+{ success: true; emailsSent: number; failed: number }
+
+// All failed (status 500):
+{ error: 'All emails failed to send' }
+```
 
 **Security**:
 - Admin-only endpoint
 - Does not store email content in database
-- Audit log tracks recipients only (no message content)
+- Rate limited by Gmail API (500ms delay between sends)
 
 ---
 
 ### functions/admin/audit.ts
 
-**Purpose**: Returns paginated audit log with optional filters.
+**Purpose**: Returns audit log with optional guest filter.
 
 **Method**: GET
 
 **Authentication**: Cloudflare Access JWT required
 
 **Query Parameters**:
-- `limit`: Max events to return (default: 100, max: 500)
-- `offset`: Skip N events (pagination)
-- `type`: Filter by event type (e.g., `rsvp_submit`, `invite_sent`)
-- `guestId`: Filter by guest ID
+- `limit`: Max events to return (default: 100, min: 1, max: 500)
+- `guest_id`: Filter by guest ID (optional)
+
+Note: No `offset` or `type` filter parameters supported.
 
 **Response**:
 ```typescript
-{
-  events: Array<{
-    id: number;
-    guest_id: number | null;
-    type: string;
-    created_at: number;  // Unix timestamp
-  }>;
-  total: number;  // Total matching events
-}
+// Returns array directly (no wrapper object):
+Array<{
+  id: number;
+  guest_id: number | null;
+  type: string;
+  created_at: number;  // Unix timestamp
+}>
 ```
 
-**Event Types**:
-- `invite_sent`: Invitation email sent
-- `invite_clicked`: Guest clicked magic link (future)
-- `invite_opened`: Guest opened invitation email (future)
-- `email_sent`: Group email sent
-- `link_clicked`: Guest clicked tracking link (future)
+**Event Types** (examples, not exhaustive):
+- `email_sent`: Magic link email sent
+- `link_clicked`: Guest clicked link
 - `verify_ok`: Magic link verified successfully
 - `verify_fail`: Magic link verification failed
 - `rsvp_submit`: RSVP submitted
+- `invite_sent`: Invitation email sent (admin resend)
+- `invite_seeded`: Guest seeded via admin
+- `invite_clicked`: Guest clicked tracking link in invite
+- `event_visibility_updated`: Guest event visibility changed
+- `event_attendance_updated`: Admin updated attendance
+- `guest_deleted`: Guest deleted
+- `event_updated`: Event configuration changed
+- `group_email_sent`: Admin bulk email sent (global event)
+- `contribution_completed`: Stripe contribution completed (from webhook)
 
 **Security**:
 - Admin-only endpoint
 - No PII stored in audit events (only guest IDs and event types)
-- Guest IDs can be null if guest deleted
+- Guest IDs can be null for global events or if guest deleted
 
 ---
 
 ### functions/admin/loadEventSummaries.ts
 
-**Purpose**: Helper function to compute attendance summaries per event.
+**Purpose**: Loads and normalizes `EventDetails`, returning a lightweight list of configured events.
 
 **Not an HTTP endpoint** - internal utility function
 
-**Used by**: `admin/index.ts`, `admin/guests.ts`
+**Used by**: `admin/guests.ts`, `admin/invite.ts`
 
 **Returns**:
 ```typescript
 {
-  [eventId: string]: {
-    attending: number;
-    declined: number;
-    pending: number;
-  }
+  events: Array<{
+    id: string;
+    label: string;
+    requiresMealSelection?: boolean;
+    mealOptions?: string[];
+  }>;
 }
 ```
 
 **Logic**:
-- Iterates all guests and party members
-- Counts attendance status per event
-- Handles missing attendance records (defaults to pending)
+- Reads singleton event record (id=1), decrypts `enc_details`, and runs `normalizeEventDetails`
+- Persists normalized details if a legacy payload was migrated
+- Maps `EventDetails.events` to `EventSummary[]` for admin UIs
 
 ---
 
 ### functions/admin/profileUtils.ts
 
-**Purpose**: Helper functions for guest profile management.
+**Purpose**: Shared helper functions for admin guest/profile operations.
 
 **Not an HTTP endpoint** - internal utility module
 
-**Key Functions**:
-- `validateGuestProfile(profile)`: Zod validation for guest profile schema
-- `normalizeGuestProfile(profile)`: Ensures consistent data structure
-- `computeAttendanceSummary(party)`: Aggregates attendance across party members
+**Key Exports**:
+- `trimToString(value)`: Coerces and trims unknown values
+- `normalizeEventSelection(raw, events, options)`: Normalizes event ID selection maps
+- `buildPartyMembers(primary, companion, allowGuest, invitedEvents)`: Builds party member list (primary + optional companion/guest)
+- `PRIMARY_ID`, `COMPANION_ID`, `GUEST_ID`: Reserved personId values for party member seeding
 
-**Used by**: `admin/guests.ts`, `admin/event.ts`
+**Used by**: `admin/guests.ts`, `admin/invite.ts`
 
 ---
 
@@ -653,26 +671,26 @@ manifest-src 'self'
 
 **Method**: POST
 
-**Authentication**: Session cookie required
+**Authentication**: Session cookie required + origin check
 
 **Rate Limit**: `STRIPE_CREATE_PER_HOUR` (default: 10)
 
 **Request Body**:
 ```typescript
 {
-  amount: number;  // Amount in dollars (converts to cents)
+  amountUsd: number;  // Amount in dollars (converts to cents internally)
 }
 ```
 
 **Flow**:
-1. Validate session cookie
-2. Check rate limit (by guest ID)
-3. Lookup guest profile
-4. Create Stripe Checkout session
-5. Set success/cancel URLs
-6. Return session ID for client redirect
+1. Verify request origin matches `APP_BASE_URL`
+2. Validate session cookie
+3. Check rate limit (by guest ID)
+4. Validate amount (min $1)
+5. Create Stripe Checkout session with `ui_mode: 'custom'`
+6. Return client secret and session ID
 
-**Response**:
+**Response** (status 201):
 ```typescript
 {
   clientSecret: string; // Stripe client secret for Elements/embedded checkout
@@ -681,13 +699,14 @@ manifest-src 'self'
 ```
 
 **Stripe Metadata**:
-- `app`: Friendly project label (update line 89 to your own project name)
+- `app`: Friendly project label (update to your own project name)
 - `contribution_dollars`: String amount used for reporting
 - `guest_id`: Guest database ID (used by webhooks to reconcile payments)
 
 **Security**:
+- Origin validation prevents embedding on other domains
 - Rate limited per guest
-- Amount validated (min $1, max $10,000)
+- Amount validated (minimum $1)
 - Stripe session IDs are single-use
 
 ---
@@ -698,7 +717,7 @@ manifest-src 'self'
 
 **Method**: GET
 
-**Authentication**: Session cookie required
+**Authentication**: Session cookie required + origin check
 
 **Rate Limit**: `STRIPE_STATUS_PER_HOUR` (default: 30)
 
@@ -708,12 +727,16 @@ manifest-src 'self'
 **Response**:
 ```typescript
 {
-  status: 'complete' | 'expired' | 'open';
-  customer_email?: string;
+  status: 'complete' | 'expired' | 'open' | null;
+  amountTotal: number | null; // Amount in cents
+  currency: string | null;
+  receiptUrl: string | null;
+  email: string | null;
 }
 ```
 
 **Security**:
+- Origin validation prevents embedding on other domains
 - Rate limited per guest
 - Only returns status for guest's own sessions (validates metadata)
 
@@ -728,23 +751,22 @@ manifest-src 'self'
 **Authentication**: Stripe webhook signature verification
 
 **Supported Events**:
-- `checkout.session.completed`: Payment successful
-- `checkout.session.expired`: Payment session expired
+- `checkout.session.completed`: Payment successful (records PII-free audit event when metadata contains guest_id)
+- `checkout.session.async_payment_failed`: Async payment failed (logs failure)
 
 **Flow**:
 1. Verify webhook signature using `STRIPE_WEBHOOK_SECRET`
 2. Extract event type and session data
-3. Log event (future: record in audit log or send confirmation email)
-4. Return 200 OK
+3. If `checkout.session.completed` and `metadata.guest_id` is present, record `contribution_completed` audit event for that guest
+4. If `checkout.session.async_payment_failed`, log the failure
+5. Return 200 OK (errors are logged but do not trigger retries)
 
 **Security**:
 - Signature verification prevents spoofed webhooks
-- Idempotent (can safely process duplicate events)
 
 **Future Enhancements**:
 - Send thank-you email on successful payment
-- Record payment in audit log
-- Display contribution on guest profile
+- Display contribution / receipt details on guest profile
+- Store contribution amounts (if you want more than audit presence)
 
 ---
-

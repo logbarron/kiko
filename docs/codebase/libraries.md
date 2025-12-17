@@ -38,8 +38,8 @@ Core utility modules for authentication, encryption, email, rate limiting, and r
 - Verification: RSA signature verification with public key
 
 **Environment Variables**:
-- `ACCESS_AUD` (optional): Expected audience claim in JWT
-- `ACCESS_JWT_ISS` (optional): Expected issuer claim in JWT
+- `ACCESS_AUD` (required unless DEV_MODE): Expected audience claim in JWT
+- `ACCESS_JWT_ISS` (required unless DEV_MODE): Expected issuer claim in JWT
 - `DEV_MODE` (optional): Set to `'true'` to bypass verification in development
 
 **Key Functions**:
@@ -197,7 +197,7 @@ Core utility modules for authentication, encryption, email, rate limiting, and r
 - Group email: Generic template for bulk messaging
 
 **Default Values**:
-- Subject fallback: `"Set your [type] email subject in admin panel"` (shown until you customize subjects in the admin UI)
+- Subject fallback: `"TODO: Set your [type] email subject in admin panel"` (shown until you customize subjects in the admin UI)
 - Font: System font stack matching `BRAND_SANS`
 
 **Notes**:
@@ -281,13 +281,14 @@ Core utility modules for authentication, encryption, email, rate limiting, and r
 - `escapeHtml(text)`: HTML entity escaping
 
 **Default Values**:
-- Font: System font stack (Apple System, Segoe UI, etc.)
-- Colors: Neutral dark palette with teal accents
+- Font: System font stack (Apple System, Segoe UI, Helvetica Neue, etc.)
+- Colors: Neutral dark palette with rose accents
 - Container: 480px max-width, 28px border-radius
 
 **Notes**:
 - Follows 8px baseline grid for spacing
-- Supports dark mode via `html.dark` class
+- Admin dashboard uses `html.dark` class (via Tailwind darkMode: 'class')
+- Guest pages use `body[data-theme]` attribute (vanilla JS)
 - Mobile responsive with breakpoint at 540px
 
 ---
@@ -332,7 +333,7 @@ Core utility modules for authentication, encryption, email, rate limiting, and r
 **Notes**:
 - Uses time-bucketed keys: `{key}:{floor(now/windowSeconds)}`
 - Automatic expiration via KV TTL
-- Increments count atomically
+- Non-atomic implementation: `KV.get` then `KV.put` (race conditions possible under high concurrency)
 
 ---
 
