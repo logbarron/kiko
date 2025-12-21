@@ -149,6 +149,52 @@ export function AdminDashboard() {
     });
   }, [eventDetails.events]);
 
+  // Proactive session expiration check
+  // Polls /admin/ping every 2.5 minutes to detect expired tokens before user interaction
+  useEffect(() => {
+    const POLL_INTERVAL_MS = 150_000; // 2.5 minutes
+
+    const checkSession = async () => {
+      try {
+        await adminFetch('/admin/ping');
+        // Session still valid - no action needed
+      } catch {
+        // adminFetch already handled 401 → startAdminReauth → redirect
+        // Nothing to do here
+      }
+    };
+
+    let intervalId: ReturnType<typeof setInterval> | null = setInterval(
+      checkSession,
+      POLL_INTERVAL_MS
+    );
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        // Tab hidden - pause polling
+        if (intervalId) {
+          clearInterval(intervalId);
+          intervalId = null;
+        }
+      } else {
+        // Tab visible again - check immediately and resume polling
+        checkSession();
+        if (!intervalId) {
+          intervalId = setInterval(checkSession, POLL_INTERVAL_MS);
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
   const getStringField = (value: unknown, key: string): string | undefined => {
     if (value && typeof value === 'object' && key in value) {
       const raw = (value as Record<string, unknown>)[key];
