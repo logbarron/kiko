@@ -819,13 +819,14 @@ function getEventCss({ serif, sans }: EventStyleFonts): string {
     .rich-text-inline a {
       color: var(--ink-780);
       text-decoration: none;
+      border-bottom: 1px dotted var(--border-30);
       transition: color 0.2s ease;
     }
 
     .rich-text a:hover,
     .rich-text-inline a:hover {
       color: var(--ink-920);
-      text-decoration: underline;
+      border-bottom-style: solid;
     }
 
     .schedule-card-header {
