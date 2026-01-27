@@ -884,6 +884,7 @@ const GuestDetail = ({
   auditEvents,
   isLoading,
   error,
+  eventTimeZone,
   onUpdateEventVisibility,
   onTogglePlusOne,
   onUpdateEventAttendance,
@@ -894,6 +895,7 @@ const GuestDetail = ({
   auditEvents: AuditEvent[] | undefined;
   isLoading: boolean;
   error: string | null | undefined;
+  eventTimeZone: string;
   onUpdateEventVisibility: (next: Record<string, boolean>) => void;
   onTogglePlusOne: (allow: boolean) => Promise<void>;
   onUpdateEventAttendance: (
@@ -927,7 +929,8 @@ const GuestDetail = ({
       day: '2-digit',
       hour: '2-digit',
       minute: '2-digit',
-      hour12: true
+      hour12: true,
+      timeZone: eventTimeZone
     }).replace(',', '');
   };
 
@@ -1236,7 +1239,7 @@ const formatEventDateTime = (startISO: string | undefined, timeZone: string | un
     return formatter.format(date);
   } catch (error) {
     console.error('Failed to format event date/time:', error);
-    return new Date(startISO).toLocaleString('en-US');
+    return new Date(startISO).toLocaleString('en-US', { timeZone: timeZone || 'UTC' });
   }
 };
 
@@ -3147,6 +3150,7 @@ export function GuestManagement({
                                 auditEvents={auditLogs[guest.id]}
                                 isLoading={auditLoading[guest.id] ?? false}
                                 error={auditError[guest.id]}
+                                eventTimeZone={eventTimeZone || 'UTC'}
                                 onUpdateEventVisibility={(next) => updateEventVisibility(guest.id, next)}
                                 onTogglePlusOne={(allow) => updateAllowPlusOne(guest.id, allow)}
                                 onUpdateEventAttendance={(eventId: string, personId: string, status: 'yes' | 'no' | 'pending') =>

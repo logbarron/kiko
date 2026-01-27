@@ -37,6 +37,7 @@ import type {
   LocalGuideSections,
   TransportationSections
 } from '@/types';
+import { formatInTimeZone, fromZonedTime } from 'date-fns-tz';
 
 const timeZoneOptions = [
   { value: 'America/New_York', label: 'Eastern Time (ET)' },
@@ -64,33 +65,96 @@ const parseISODate = (iso?: string): Date | undefined => {
   return Number.isNaN(parsed.getTime()) ? undefined : parsed;
 };
 
-const getTimeValueFromISO = (iso?: string): string => {
-  const date = parseISODate(iso);
-  if (!date) {
-    return '';
+const pad2 = (value: number): string => value.toString().padStart(2, '0');
+
+const getZonedParts = (
+  iso: string | undefined,
+  timezone: string
+): { year: number; month: number; day: number; hours: number; minutes: number } | undefined => {
+  if (!iso) return undefined;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return undefined;
+
+  try {
+    const wallClock = formatInTimeZone(date, timezone, "yyyy-MM-dd'T'HH:mm");
+    const [datePart, timePart] = wallClock.split('T');
+    if (!datePart || !timePart) return undefined;
+
+    const [yearStr, monthStr, dayStr] = datePart.split('-');
+    const [hourStr, minuteStr] = timePart.split(':');
+    const year = Number(yearStr);
+    const month = Number(monthStr);
+    const day = Number(dayStr);
+    const hours = Number(hourStr);
+    const minutes = Number(minuteStr);
+
+    if ([year, month, day, hours, minutes].some(Number.isNaN)) return undefined;
+    return { year, month, day, hours, minutes };
+  } catch {
+    return undefined;
   }
-  const hours = date.getHours().toString().padStart(2, '0');
-  const minutes = date.getMinutes().toString().padStart(2, '0');
-  return `${hours}:${minutes}`;
 };
 
-const combineDateAndTime = (date: Date | undefined, time: string | undefined): string | undefined => {
+// Convert stored ISO to a Date for DatePicker display.
+// DatePicker uses format() which uses LOCAL methods, so build a Date whose local
+// components match the event timezone wall-clock values.
+const toDisplayDate = (iso: string | undefined, timezone: string): Date | undefined => {
+  const parts = getZonedParts(iso, timezone);
+  if (!parts) return undefined;
+
+  return new Date(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    parts.hours,
+    parts.minutes,
+    0,
+    0
+  );
+};
+
+// Extract time string from stored ISO in event timezone
+const getTimeValueFromISO = (iso: string | undefined, timezone: string): string => {
+  const parts = getZonedParts(iso, timezone);
+  if (!parts) return '';
+  return `${pad2(parts.hours)}:${pad2(parts.minutes)}`;
+};
+
+// Convert a display Date (from DatePicker) to stored ISO.
+// DatePicker returns a Date in browser-local time representing user's intended date.
+// We extract LOCAL values (user's intent) and interpret as event timezone.
+const combineDateAndTime = (date: Date | undefined, time: string | undefined, timezone: string): string | undefined => {
   if (!date) {
     return undefined;
   }
 
+  // Extract LOCAL values - this is what the user sees and intends
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  const day = date.getDate();
+
   const [hourStr, minuteStr] = (time ?? '').split(':');
-  const hours = Number(hourStr);
-  const minutes = Number(minuteStr);
+  const hours = Number.isFinite(Number(hourStr)) ? Number(hourStr) : 0;
+  const minutes = Number.isFinite(Number(minuteStr)) ? Number(minuteStr) : 0;
 
-  const next = new Date(date);
-  if (Number.isFinite(hours) && Number.isFinite(minutes)) {
-    next.setHours(hours, minutes, 0, 0);
-  } else {
-    next.setHours(0, 0, 0, 0);
-  }
+  // Create Date with these local components - fromZonedTime extracts local values
+  const localDate = new Date(year, month, day, hours, minutes, 0, 0);
 
-  return Number.isNaN(next.getTime()) ? undefined : next.toISOString();
+  // Interpret as event timezone, convert to UTC for storage
+  return fromZonedTime(localDate, timezone).toISOString();
+};
+
+// When timezone changes, recalculate stored dates to preserve calendar values
+const recalculateDateForTimezone = (
+  isoString: string | undefined,
+  oldTimezone: string,
+  newTimezone: string
+): string | undefined => {
+  const parts = getZonedParts(isoString, oldTimezone);
+  if (!parts) return undefined;
+
+  const wallClock = `${parts.year}-${pad2(parts.month)}-${pad2(parts.day)}T${pad2(parts.hours)}:${pad2(parts.minutes)}:00`;
+  return fromZonedTime(wallClock, newTimezone).toISOString();
 };
 
 
@@ -136,8 +200,11 @@ export function EventTabContent({ eventForm, setEventForm, saveEventDetails, isL
                   <div className="space-y-2">
                     <Label>Event Date</Label>
                     <DatePicker
-                      date={eventForm.dateISO ? new Date(eventForm.dateISO) : undefined}
-                      onDateChange={(date) => setEventForm({ ...eventForm, dateISO: date?.toISOString() || '' })}
+                      date={toDisplayDate(eventForm.dateISO, eventForm.timeZone || 'UTC')}
+                      onDateChange={(date) => setEventForm({
+                        ...eventForm,
+                        dateISO: combineDateAndTime(date, undefined, eventForm.timeZone || 'UTC') || ''
+                      })}
                       placeholder="Select wedding date"
                     />
                     <p className="text-xs text-muted-foreground">Main event date shown prominently</p>
@@ -146,8 +213,11 @@ export function EventTabContent({ eventForm, setEventForm, saveEventDetails, isL
                   <div className="space-y-2">
                     <Label>RSVP Deadline</Label>
                     <DatePicker
-                      date={eventForm.rsvpDeadlineISO ? new Date(eventForm.rsvpDeadlineISO) : undefined}
-                      onDateChange={(date) => setEventForm({ ...eventForm, rsvpDeadlineISO: date?.toISOString() })}
+                      date={toDisplayDate(eventForm.rsvpDeadlineISO, eventForm.timeZone || 'UTC')}
+                      onDateChange={(date) => setEventForm({
+                        ...eventForm,
+                        rsvpDeadlineISO: combineDateAndTime(date, undefined, eventForm.timeZone || 'UTC')
+                      })}
                       placeholder="Select RSVP deadline"
                     />
                     <p className="text-xs text-muted-foreground">Guests see this deadline on the RSVP form</p>
@@ -214,7 +284,22 @@ export function EventTabContent({ eventForm, setEventForm, saveEventDetails, isL
                     <Label htmlFor="timeZone">Time Zone</Label>
                     <Select
                       value={eventForm.timeZone || undefined}
-                      onValueChange={(value) => setEventForm({ ...eventForm, timeZone: value })}
+                      onValueChange={(newTimezone) => {
+                        const oldTimezone = eventForm.timeZone || 'UTC';
+                        if (newTimezone === oldTimezone) return;
+
+                        setEventForm({
+                          ...eventForm,
+                          timeZone: newTimezone,
+                          dateISO: recalculateDateForTimezone(eventForm.dateISO, oldTimezone, newTimezone) || '',
+                          rsvpDeadlineISO: recalculateDateForTimezone(eventForm.rsvpDeadlineISO, oldTimezone, newTimezone),
+                          events: (eventForm.events || []).map(event => ({
+                            ...event,
+                            startISO: recalculateDateForTimezone(event.startISO, oldTimezone, newTimezone),
+                            endISO: recalculateDateForTimezone(event.endISO, oldTimezone, newTimezone),
+                          })),
+                        });
+                      }}
                     >
                       <SelectTrigger id="timeZone" className="w-full">
                         <SelectValue placeholder="Select time zone..." />
@@ -288,8 +373,8 @@ export function EventTabContent({ eventForm, setEventForm, saveEventDetails, isL
                   <div key={event.id ?? idx} className="space-y-6 p-6 border rounded-lg bg-muted/20">
                     {(() => {
                       const timezone = eventForm.timeZone || 'UTC';
-                      const eventStartDate = parseISODate(event.startISO) ?? parseISODate(eventForm.dateISO);
-                      const timeValue = getTimeValueFromISO(event.startISO);
+                      const eventStartDate = toDisplayDate(event.startISO, timezone) ?? toDisplayDate(eventForm.dateISO, timezone);
+                      const timeValue = getTimeValueFromISO(event.startISO, timezone);
 
                       return (
                         <>
@@ -315,7 +400,7 @@ export function EventTabContent({ eventForm, setEventForm, saveEventDetails, isL
                                   const next = [...(eventForm.events || [])];
                                   const nextEvent = { ...event };
                                   const iso = selectedDate
-                                    ? combineDateAndTime(selectedDate, timeValue || '17:00')
+                                    ? combineDateAndTime(selectedDate, timeValue || '17:00', timezone)
                                     : undefined;
 
                                   nextEvent.startISO = iso;
@@ -335,11 +420,11 @@ export function EventTabContent({ eventForm, setEventForm, saveEventDetails, isL
                                   const next = [...(eventForm.events || [])];
                                   const nextEvent = { ...event };
                                   const newValue = e.target.value;
-                                  const baseDate = parseISODate(nextEvent.startISO) ?? eventStartDate;
+                                  const baseDate = toDisplayDate(nextEvent.startISO, timezone) ?? eventStartDate;
                                   const iso = newValue && baseDate
-                                    ? combineDateAndTime(baseDate, newValue)
+                                    ? combineDateAndTime(baseDate, newValue, timezone)
                                     : baseDate
-                                      ? combineDateAndTime(baseDate, undefined)
+                                      ? combineDateAndTime(baseDate, undefined, timezone)
                                       : undefined;
 
                                   nextEvent.startISO = iso;

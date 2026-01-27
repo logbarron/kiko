@@ -168,7 +168,7 @@ function buildEventViewModel(
     },
     guest: {
       greetingName: resolvePrimaryGreeting(guestProfile.party, siteTitle),
-      partySummary: buildPartySummary(guestProfile.party),
+      partySummary: buildPartySummary(guestProfile.party, event.timeZone),
       members: partyMembers
     },
     navigation: {
@@ -499,7 +499,7 @@ function buildRegistry(event: EventDetails): EventPageViewModel['registry'] {
   return items.length > 0 ? items : undefined;
 }
 
-function buildPartySummary(party: PartyMember[]): string {
+function buildPartySummary(party: PartyMember[], timezone: string): string {
   const names = party
     .map(formatMemberName)
     .filter(Boolean);
@@ -513,7 +513,8 @@ function buildPartySummary(party: PartyMember[]): string {
     day: 'numeric',
     year: 'numeric',
     hour: 'numeric',
-    minute: '2-digit'
+    minute: '2-digit',
+    timeZone: timezone || 'UTC'
   });
 
   return `${names.join(' + ')} • updated ${lastUpdated}`;

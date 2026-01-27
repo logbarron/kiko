@@ -94,7 +94,7 @@ function renderPrimaryButton(text: string, href: string): string {
   return `
     <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto;border-collapse:separate;">
       <tr>
-        <td align="center" style="border-radius:999px;background:linear-gradient(135deg,#0f766e 0%,#14b8a6 100%);">
+        <td align="center" bgcolor="#0f766e" style="border-radius:999px;background-color:#0f766e;background:linear-gradient(135deg,#0f766e 0%,#14b8a6 100%);">
           <a href="${safeHref}" style="display:inline-block;padding:16px 36px;font-family:${BRAND_SANS};font-size:16px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:999px;letter-spacing:0.02em;">
             ${safeText}
           </a>
@@ -469,7 +469,7 @@ export async function sendMagicLinkEmail(
 ): Promise<void> {
   try {
     const { html, text } = renderMagicLinkEmail(magicLink);
-    const subject = subjectOverride?.trim() || 'TODO: Set your magic link email subject in admin panel';
+    const subject = subjectOverride?.trim() || 'UPDATE MAGIC LINK SUBJECT';
     await sendGmailMessage({
       env,
       to,
@@ -493,7 +493,7 @@ export async function sendWeddingInvitation(
 ): Promise<void> {
   try {
     const { html, text } = renderWeddingInvitationEmail(party, trackingUrl);
-    const subject = subjectOverride?.trim() || "TODO: Set your invitation email subject in admin panel";
+    const subject = subjectOverride?.trim() || "UPDATE INVITATION SUBJECT";
     await sendGmailMessage({
       env,
       to,
