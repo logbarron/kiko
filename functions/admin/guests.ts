@@ -848,7 +848,7 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
       );
 
       await env.DB.prepare(
-        'UPDATE guests SET enc_profile = ?, invite_token_hash = ?, invite_sent_at = ?, updated_at = ? WHERE id = ?'
+        'UPDATE guests SET enc_profile = ?, invite_token_hash = ?, invite_sent_at = ?, invite_clicked_at = NULL, updated_at = ? WHERE id = ?'
       ).bind(encProfile, inviteTokenHash, now, now, guestId).run();
 
       await env.DB.prepare(
