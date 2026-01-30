@@ -217,78 +217,89 @@ export const onRequestGet: PagesFunction<Env> = async (context) => {
     let auditSummaries: Record<number, Record<string, { count: number; last: number | null }>> = {};
     let magicSummaries: Record<number, { issuedCount: number; lastIssued: number | null; usedCount: number; lastUsed: number | null }> = {};
 
+    // D1 has a limit of 100 bound parameters per query, so batch guest IDs
+    const D1_PARAM_LIMIT = 99;
+    const guestIdChunks: number[][] = [];
+    for (let i = 0; i < guestIds.length; i += D1_PARAM_LIMIT) {
+      guestIdChunks.push(guestIds.slice(i, i + D1_PARAM_LIMIT));
+    }
+
     if (guestIds.length > 0) {
-      const placeholders = guestIds.map(() => '?').join(',');
-
-      const auditResults = await env.DB.prepare(
-        `SELECT guest_id, type, COUNT(*) as count, MAX(created_at) as last
-         FROM audit_events
-         WHERE guest_id IN (${placeholders})
-         GROUP BY guest_id, type`
-      ).bind(...guestIds).all();
-
       const nextAuditSummaries: Record<number, Record<string, { count: number; last: number | null }>> = {};
-      for (const row of (auditResults.results || []) as Array<Record<string, unknown>>) {
-        const guestIdRaw = row.guest_id;
-        if (guestIdRaw === null || guestIdRaw === undefined) {
-          continue;
+      for (const chunk of guestIdChunks) {
+        const placeholders = chunk.map(() => '?').join(',');
+        const auditResults = await env.DB.prepare(
+          `SELECT guest_id, type, COUNT(*) as count, MAX(created_at) as last
+           FROM audit_events
+           WHERE guest_id IN (${placeholders})
+           GROUP BY guest_id, type`
+        ).bind(...chunk).all();
+
+        for (const row of (auditResults.results || []) as Array<Record<string, unknown>>) {
+          const guestIdRaw = row.guest_id;
+          if (guestIdRaw === null || guestIdRaw === undefined) {
+            continue;
+          }
+          const guestId = Number(guestIdRaw);
+          if (!Number.isFinite(guestId)) {
+            continue;
+          }
+          const type = String(row.type ?? 'unknown');
+          const countRaw = Number(row.count ?? 0);
+          const count = Number.isFinite(countRaw) ? countRaw : 0;
+          const lastRaw = row.last;
+          const lastNumber = lastRaw === null || lastRaw === undefined ? null : Number(lastRaw);
+          const last = lastNumber !== null && Number.isFinite(lastNumber) ? lastNumber : null;
+          if (!nextAuditSummaries[guestId]) {
+            nextAuditSummaries[guestId] = {};
+          }
+          nextAuditSummaries[guestId][type] = {
+            count,
+            last
+          };
         }
-        const guestId = Number(guestIdRaw);
-        if (!Number.isFinite(guestId)) {
-          continue;
-        }
-        const type = String(row.type ?? 'unknown');
-        const countRaw = Number(row.count ?? 0);
-        const count = Number.isFinite(countRaw) ? countRaw : 0;
-        const lastRaw = row.last;
-        const lastNumber = lastRaw === null || lastRaw === undefined ? null : Number(lastRaw);
-        const last = lastNumber !== null && Number.isFinite(lastNumber) ? lastNumber : null;
-        if (!nextAuditSummaries[guestId]) {
-          nextAuditSummaries[guestId] = {};
-        }
-        nextAuditSummaries[guestId][type] = {
-          count,
-          last
-        };
       }
       auditSummaries = nextAuditSummaries;
 
-      const magicResults = await env.DB.prepare(
-        `SELECT
-           guest_id,
-           COUNT(*) as issued_count,
-           MAX(issued_at) as last_issued,
-           SUM(CASE WHEN used_at IS NOT NULL THEN 1 ELSE 0 END) as used_count,
-           MAX(CASE WHEN used_at IS NOT NULL THEN used_at ELSE NULL END) as last_used
-         FROM magic_links
-         WHERE guest_id IN (${placeholders})
-         GROUP BY guest_id`
-      ).bind(...guestIds).all();
-
       const nextMagicSummaries: Record<number, { issuedCount: number; lastIssued: number | null; usedCount: number; lastUsed: number | null }> = {};
-      for (const row of (magicResults.results || []) as Array<Record<string, unknown>>) {
-        const guestIdRaw = row.guest_id;
-        if (guestIdRaw === null || guestIdRaw === undefined) {
-          continue;
+      for (const chunk of guestIdChunks) {
+        const placeholders = chunk.map(() => '?').join(',');
+        const magicResults = await env.DB.prepare(
+          `SELECT
+             guest_id,
+             COUNT(*) as issued_count,
+             MAX(issued_at) as last_issued,
+             SUM(CASE WHEN used_at IS NOT NULL THEN 1 ELSE 0 END) as used_count,
+             MAX(CASE WHEN used_at IS NOT NULL THEN used_at ELSE NULL END) as last_used
+           FROM magic_links
+           WHERE guest_id IN (${placeholders})
+           GROUP BY guest_id`
+        ).bind(...chunk).all();
+
+        for (const row of (magicResults.results || []) as Array<Record<string, unknown>>) {
+          const guestIdRaw = row.guest_id;
+          if (guestIdRaw === null || guestIdRaw === undefined) {
+            continue;
+          }
+          const guestId = Number(guestIdRaw);
+          if (!Number.isFinite(guestId)) {
+            continue;
+          }
+          const issuedRaw = Number(row.issued_count ?? 0);
+          const usedRaw = Number(row.used_count ?? 0);
+          const issuedCount = Number.isFinite(issuedRaw) ? issuedRaw : 0;
+          const usedCount = Number.isFinite(usedRaw) ? usedRaw : 0;
+          const lastIssuedCandidate = row.last_issued;
+          const lastUsedCandidate = row.last_used;
+          const lastIssuedNumber = lastIssuedCandidate === null || lastIssuedCandidate === undefined ? null : Number(lastIssuedCandidate);
+          const lastUsedNumber = lastUsedCandidate === null || lastUsedCandidate === undefined ? null : Number(lastUsedCandidate);
+          nextMagicSummaries[guestId] = {
+            issuedCount,
+            usedCount,
+            lastIssued: lastIssuedNumber !== null && Number.isFinite(lastIssuedNumber) ? lastIssuedNumber : null,
+            lastUsed: lastUsedNumber !== null && Number.isFinite(lastUsedNumber) ? lastUsedNumber : null
+          };
         }
-        const guestId = Number(guestIdRaw);
-        if (!Number.isFinite(guestId)) {
-          continue;
-        }
-        const issuedRaw = Number(row.issued_count ?? 0);
-        const usedRaw = Number(row.used_count ?? 0);
-        const issuedCount = Number.isFinite(issuedRaw) ? issuedRaw : 0;
-        const usedCount = Number.isFinite(usedRaw) ? usedRaw : 0;
-        const lastIssuedCandidate = row.last_issued;
-        const lastUsedCandidate = row.last_used;
-        const lastIssuedNumber = lastIssuedCandidate === null || lastIssuedCandidate === undefined ? null : Number(lastIssuedCandidate);
-        const lastUsedNumber = lastUsedCandidate === null || lastUsedCandidate === undefined ? null : Number(lastUsedCandidate);
-        nextMagicSummaries[guestId] = {
-          issuedCount,
-          usedCount,
-          lastIssued: lastIssuedNumber !== null && Number.isFinite(lastIssuedNumber) ? lastIssuedNumber : null,
-          lastUsed: lastUsedNumber !== null && Number.isFinite(lastUsedNumber) ? lastUsedNumber : null
-        };
       }
       magicSummaries = nextMagicSummaries;
     }

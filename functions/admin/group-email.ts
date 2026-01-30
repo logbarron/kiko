@@ -49,22 +49,27 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
         return new Response('No recipients selected', { status: 400 }) as unknown as CfResponse;
       }
 
-      const placeholders = ids.map(() => '?').join(',');
-      const rows = await env.DB.prepare(
-        `SELECT email_hash, enc_profile FROM guests WHERE id IN (${placeholders})`
-      ).bind(...ids).all();
+      // D1 has a limit of 100 bound parameters per query, so batch IDs
+      const D1_PARAM_LIMIT = 99;
+      for (let i = 0; i < ids.length; i += D1_PARAM_LIMIT) {
+        const chunk = ids.slice(i, i + D1_PARAM_LIMIT);
+        const placeholders = chunk.map(() => '?').join(',');
+        const rows = await env.DB.prepare(
+          `SELECT email_hash, enc_profile FROM guests WHERE id IN (${placeholders})`
+        ).bind(...chunk).all();
 
-      for (const row of rows.results) {
-        const profile = await decryptJson(
-          row.enc_profile as string,
-          env.KEK_B64,
-          'guests',
-          row.email_hash as string,
-          'profile'
-        ) as GuestProfile;
+        for (const row of rows.results) {
+          const profile = await decryptJson(
+            row.enc_profile as string,
+            env.KEK_B64,
+            'guests',
+            row.email_hash as string,
+            'profile'
+          ) as GuestProfile;
 
-        if (profile.email?.trim()) {
-          emails.push(profile.email.trim().toLowerCase());
+          if (profile.email?.trim()) {
+            emails.push(profile.email.trim().toLowerCase());
+          }
         }
       }
     }
