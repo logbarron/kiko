@@ -334,8 +334,6 @@ type InviteRosterStatus =
   | { type: 'on-list' }
   | { type: 'invite-sent' }
   | { type: 'invite-not-sent' }
-  | { type: 'invite-clicked' }
-  | { type: 'invite-not-clicked' }
   | { type: 'magic-links' };
 
 interface InviteRosterEntry {
@@ -1570,8 +1568,6 @@ export function GuestManagement({
       'on-list': [],
       'invite-sent': [],
       'invite-not-sent': [],
-      'invite-clicked': [],
-      'invite-not-clicked': [],
       'magic-links': []
     };
 
@@ -1599,11 +1595,6 @@ export function GuestManagement({
 
       if (guest.inviteSentAt != null) {
         rosters['invite-sent'].push(entry);
-        if (guest.inviteClickedAt != null) {
-          rosters['invite-clicked'].push(entry);
-        } else {
-          rosters['invite-not-clicked'].push(entry);
-        }
       } else {
         rosters['invite-not-sent'].push(entry);
       }
@@ -2094,16 +2085,14 @@ export function GuestManagement({
       'on-list': 'Guests',
       'invite-sent': 'Invite Sent',
       'invite-not-sent': 'Not Sent',
-      'invite-clicked': 'Invite Clicked',
-      'invite-not-clicked': 'Invite Not Clicked',
       'magic-links': 'Magic Links'
     };
 
     const showSendAction = status.type === 'invite-not-sent';
-    const showResendAction = status.type === 'invite-sent' || status.type === 'invite-not-clicked' || status.type === 'invite-clicked';
+    const showResendAction = status.type === 'invite-sent';
     const showMagicLinkColumns = status.type === 'magic-links';
     const showSentColumn = status.type === 'invite-sent';
-    const showClickedColumn = status.type === 'invite-clicked' || status.type === 'invite-not-clicked';
+    const showClickedColumn = status.type === 'invite-sent';
 
     return (
       <div className="rounded-md border bg-background/70">
@@ -2912,6 +2901,9 @@ export function GuestManagement({
                         >
                           <p className="text-xs font-semibold uppercase text-muted-foreground">Invite Sent</p>
                           <p className="mt-1 text-lg font-semibold">{inviteMetrics.sent}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {inviteMetrics.clicked} clicked · {inviteMetrics.notClicked} not
+                          </p>
                         </button>
 
                         {/* Tile 3: Not Sent */}
@@ -2928,24 +2920,7 @@ export function GuestManagement({
                           <p className="mt-1 text-lg font-semibold">{inviteMetrics.notSent}</p>
                         </button>
 
-                        {/* Tile 4: Invite Click */}
-                        <button
-                          type="button"
-                          className={cn(
-                            'rounded-md border bg-background/60 p-3 text-left shadow-sm cursor-pointer hover:bg-background/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                            (inviteRosterSelection?.type === 'invite-clicked' || inviteRosterSelection?.type === 'invite-not-clicked') && 'ring-2 ring-primary'
-                          )}
-                          onClick={() => toggleInviteRosterPanel({ type: 'invite-clicked' })}
-                          aria-pressed={inviteRosterSelection?.type === 'invite-clicked' || inviteRosterSelection?.type === 'invite-not-clicked'}
-                        >
-                          <p className="text-xs font-semibold uppercase text-muted-foreground">Invite Click</p>
-                          <p className="mt-1 text-lg font-semibold">{inviteMetrics.clicked}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {inviteMetrics.clicked} clicked · {inviteMetrics.notClicked} not
-                          </p>
-                        </button>
-
-                        {/* Tile 5: Magic Links */}
+                        {/* Tile 4: Magic Links */}
                         <button
                           type="button"
                           className={cn(
