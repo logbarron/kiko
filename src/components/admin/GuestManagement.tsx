@@ -329,6 +329,29 @@ type RosterStatus =
   | { type: 'meal-pending' }
   | { type: 'meal'; mealKey: string };
 
+// Invite-level roster status (parallel to event-level RosterStatus)
+type InviteRosterStatus =
+  | { type: 'on-list' }
+  | { type: 'invite-sent' }
+  | { type: 'invite-not-sent' }
+  | { type: 'invite-clicked' }
+  | { type: 'invite-not-clicked' }
+  | { type: 'magic-links' };
+
+interface InviteRosterEntry {
+  guestId: number;
+  guest: Guest;
+  displayName: string;
+  email: string;
+  inviteSentAt: number | null;
+  inviteClickedAt: number | null;
+  magicLinksIssued: number;
+  magicLinksUsed: number;
+  magicLinksLastIssued: number | null;
+  magicLinksLastUsed: number | null;
+  partySortKey: string;
+}
+
 const memberRosterStatusLabels: Record<MemberRosterStatus, string> = {
   attending: 'Attending',
   pending: 'Pending',
@@ -1276,6 +1299,7 @@ export function GuestManagement({
   const [auditLoading, setAuditLoading] = useState<Record<number, boolean>>({});
   const [auditError, setAuditError] = useState<Record<number, string | null>>({});
   const [rosterSelection, setRosterSelection] = useState<{ eventId: string; status: RosterStatus } | null>(null);
+  const [inviteRosterSelection, setInviteRosterSelection] = useState<InviteRosterStatus | null>(null);
   const [focusedGuestId, setFocusedGuestId] = useState<number | null>(null);
   const [openAccordionSections, setOpenAccordionSections] = useState<string[]>([]);
   const [openGuestListSections, setOpenGuestListSections] = useState<string[]>([]);
@@ -1516,6 +1540,88 @@ export function GuestManagement({
 
     return initial;
   }, [events, guests]);
+
+  // Invite status metrics (global, not per-event)
+  const inviteMetrics = useMemo(() => {
+    const onList = guests.length;
+    const sent = guests.filter(g => g.inviteSentAt != null).length;
+    const notSent = onList - sent;
+    const clicked = guests.filter(g => g.inviteClickedAt != null).length;
+    const notClicked = sent - clicked;
+    const withMagicLinks = guests.filter(g => (g.activity?.magicLinks?.issuedCount ?? 0) > 0).length;
+    const totalMagicLinksUsed = guests.reduce((sum, g) => sum + (g.activity?.magicLinks?.usedCount ?? 0), 0);
+    const totalMagicLinksIssued = guests.reduce((sum, g) => sum + (g.activity?.magicLinks?.issuedCount ?? 0), 0);
+
+    return {
+      onList,
+      sent,
+      notSent,
+      clicked,
+      notClicked,
+      withMagicLinks,
+      totalMagicLinksUsed,
+      totalMagicLinksIssued
+    };
+  }, [guests]);
+
+  // Invite roster data by status
+  const inviteRosterByStatus = useMemo(() => {
+    const rosters: Record<InviteRosterStatus['type'], InviteRosterEntry[]> = {
+      'on-list': [],
+      'invite-sent': [],
+      'invite-not-sent': [],
+      'invite-clicked': [],
+      'invite-not-clicked': [],
+      'magic-links': []
+    };
+
+    guests.forEach(guest => {
+      const primaryMember = guest.party.find(m => m.role === 'primary') ?? guest.party[0];
+      const displayName = primaryMember ? formatMemberDisplayName(primaryMember) : guest.email;
+      const partySummary = getPartySummary(guest);
+      const partySortKey = buildPartySortKey(primaryMember ?? null, partySummary, guest.email, guest.id);
+
+      const entry: InviteRosterEntry = {
+        guestId: guest.id,
+        guest,
+        displayName,
+        email: guest.email,
+        inviteSentAt: guest.inviteSentAt ?? null,
+        inviteClickedAt: guest.inviteClickedAt ?? null,
+        magicLinksIssued: guest.activity?.magicLinks?.issuedCount ?? 0,
+        magicLinksUsed: guest.activity?.magicLinks?.usedCount ?? 0,
+        magicLinksLastIssued: guest.activity?.magicLinks?.lastIssued ?? null,
+        magicLinksLastUsed: guest.activity?.magicLinks?.lastUsed ?? null,
+        partySortKey
+      };
+
+      rosters['on-list'].push(entry);
+
+      if (guest.inviteSentAt != null) {
+        rosters['invite-sent'].push(entry);
+        if (guest.inviteClickedAt != null) {
+          rosters['invite-clicked'].push(entry);
+        } else {
+          rosters['invite-not-clicked'].push(entry);
+        }
+      } else {
+        rosters['invite-not-sent'].push(entry);
+      }
+
+      if ((guest.activity?.magicLinks?.issuedCount ?? 0) > 0) {
+        rosters['magic-links'].push(entry);
+      }
+    });
+
+    // Sort all rosters
+    Object.keys(rosters).forEach(key => {
+      rosters[key as InviteRosterStatus['type']].sort((a, b) =>
+        a.partySortKey.localeCompare(b.partySortKey)
+      );
+    });
+
+    return rosters;
+  }, [guests]);
 
   const filteredGuests = useMemo(() => {
     return guests.filter((guest) => {
@@ -1949,6 +2055,141 @@ export function GuestManagement({
                       size="icon"
                       onClick={() => focusGuestFromRoster(entry.guestId)}
                       aria-label={`Manage ${entry.displayName}`}
+                    >
+                      <ArrowUpRight className="h-4 w-4" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </div>
+    );
+  };
+
+  // Toggle invite roster panel
+  const toggleInviteRosterPanel = (status: InviteRosterStatus) => {
+    setInviteRosterSelection((prev) => {
+      if (prev && prev.type === status.type) {
+        return null;
+      }
+      return status;
+    });
+  };
+
+  // Render invite roster panel
+  const renderInviteRosterPanel = (status: InviteRosterStatus) => {
+    const roster = inviteRosterByStatus[status.type];
+
+    if (!roster || roster.length === 0) {
+      return (
+        <div className="rounded-md border bg-background/70 p-4">
+          <p className="text-sm text-muted-foreground">No guests match this status.</p>
+        </div>
+      );
+    }
+
+    const statusLabels: Record<InviteRosterStatus['type'], string> = {
+      'on-list': 'Guests',
+      'invite-sent': 'Invite Sent',
+      'invite-not-sent': 'Not Sent',
+      'invite-clicked': 'Invite Clicked',
+      'invite-not-clicked': 'Invite Not Clicked',
+      'magic-links': 'Magic Links'
+    };
+
+    const showSendAction = status.type === 'invite-not-sent';
+    const showResendAction = status.type === 'invite-sent' || status.type === 'invite-not-clicked' || status.type === 'invite-clicked';
+    const showMagicLinkColumns = status.type === 'magic-links';
+    const showSentColumn = status.type === 'invite-sent';
+    const showClickedColumn = status.type === 'invite-clicked' || status.type === 'invite-not-clicked';
+
+    return (
+      <div className="rounded-md border bg-background/70">
+        <div className="flex items-center justify-between border-b bg-background/60 px-4 py-3">
+          <div>
+            <p className="text-sm font-semibold text-foreground">{statusLabels[status.type]}</p>
+            <p className="text-xs text-muted-foreground">{roster.length} guest{roster.length === 1 ? '' : 's'}</p>
+          </div>
+        </div>
+        <div className="max-h-64 overflow-y-auto">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Email</TableHead>
+                {showSentColumn ? <TableHead>Sent</TableHead> : null}
+                {showClickedColumn ? <TableHead>Clicked</TableHead> : null}
+                {showMagicLinkColumns ? (
+                  <>
+                    <TableHead>Requested</TableHead>
+                    <TableHead>Used</TableHead>
+                  </>
+                ) : null}
+                {(showSendAction || showResendAction) ? (
+                  <TableHead className="text-center">{showSendAction ? 'Send' : 'Resend'}</TableHead>
+                ) : null}
+                <TableHead className="text-center">Manage</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {roster.map((entry) => (
+                <TableRow key={entry.guestId}>
+                  <TableCell>
+                    <span className="font-medium text-foreground">{getPartySummary(entry.guest)}</span>
+                  </TableCell>
+                  <TableCell>
+                    <span className="text-sm text-muted-foreground">{entry.email}</span>
+                  </TableCell>
+                  {showSentColumn ? (
+                    <TableCell>
+                      <span className="text-xs text-muted-foreground">
+                        {entry.inviteSentAt ? relativeTimeFromSeconds(entry.inviteSentAt) : '—'}
+                      </span>
+                    </TableCell>
+                  ) : null}
+                  {showClickedColumn ? (
+                    <TableCell>
+                      <span className="text-xs text-muted-foreground">
+                        {entry.inviteClickedAt ? relativeTimeFromSeconds(entry.inviteClickedAt) : '—'}
+                      </span>
+                    </TableCell>
+                  ) : null}
+                  {showMagicLinkColumns ? (
+                    <>
+                      <TableCell>
+                        <span className="text-xs text-muted-foreground">
+                          {entry.magicLinksLastIssued ? relativeTimeFromSeconds(entry.magicLinksLastIssued) : '—'}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <span className="text-xs text-muted-foreground">
+                          {entry.magicLinksLastUsed ? relativeTimeFromSeconds(entry.magicLinksLastUsed) : '—'}
+                        </span>
+                      </TableCell>
+                    </>
+                  ) : null}
+                  {(showSendAction || showResendAction) ? (
+                    <TableCell className="text-center">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => canSendInvite && resendInvite(entry.guestId)}
+                        disabled={!canSendInvite}
+                        title={canSendInvite ? undefined : 'Update email subjects before sending invites'}
+                        aria-label={showSendAction ? 'Send invite' : 'Resend invite'}
+                      >
+                        <Mail className="h-4 w-4" />
+                      </Button>
+                    </TableCell>
+                  ) : null}
+                  <TableCell className="text-center">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => focusGuestFromRoster(entry.guestId)}
+                      aria-label={`Manage ${getPartySummary(entry.guest)}`}
                     >
                       <ArrowUpRight className="h-4 w-4" />
                     </Button>
@@ -2622,6 +2863,112 @@ export function GuestManagement({
                     </Button>
                   </div>
                 </div>
+              </AccordionContent>
+            </AccordionItem>
+
+            {/* Email Metrics Section */}
+            <AccordionItem value="email-metrics" className="border rounded-lg px-4">
+              <AccordionTrigger className="hover:no-underline">
+                <div className="flex items-center gap-2">
+                  <BarChart3 className="h-4 w-4" />
+                  <span className="font-medium">Email Metrics</span>
+                </div>
+              </AccordionTrigger>
+              <AccordionContent className="space-y-4 pt-4">
+                <Collapsible
+                  open={inviteRosterSelection !== null}
+                  onOpenChange={(open) => {
+                    if (!open) {
+                      setInviteRosterSelection(null);
+                    }
+                  }}
+                >
+                  <div className="rounded-lg border p-4">
+                    <div className="space-y-3">
+                      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+                        {/* Tile 1: Guests */}
+                        <button
+                          type="button"
+                          className={cn(
+                            'rounded-md border bg-background/60 p-3 text-left shadow-sm cursor-pointer hover:bg-background/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                            inviteRosterSelection?.type === 'on-list' && 'ring-2 ring-primary'
+                          )}
+                          onClick={() => toggleInviteRosterPanel({ type: 'on-list' })}
+                          aria-pressed={inviteRosterSelection?.type === 'on-list'}
+                        >
+                          <p className="text-xs font-semibold uppercase text-muted-foreground">Guests</p>
+                          <p className="mt-1 text-lg font-semibold">{inviteMetrics.onList}</p>
+                        </button>
+
+                        {/* Tile 2: Invite Sent */}
+                        <button
+                          type="button"
+                          className={cn(
+                            'rounded-md border bg-background/60 p-3 text-left shadow-sm cursor-pointer hover:bg-background/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                            inviteRosterSelection?.type === 'invite-sent' && 'ring-2 ring-primary'
+                          )}
+                          onClick={() => toggleInviteRosterPanel({ type: 'invite-sent' })}
+                          aria-pressed={inviteRosterSelection?.type === 'invite-sent'}
+                        >
+                          <p className="text-xs font-semibold uppercase text-muted-foreground">Invite Sent</p>
+                          <p className="mt-1 text-lg font-semibold">{inviteMetrics.sent}</p>
+                        </button>
+
+                        {/* Tile 3: Not Sent */}
+                        <button
+                          type="button"
+                          className={cn(
+                            'rounded-md border bg-background/60 p-3 text-left shadow-sm cursor-pointer hover:bg-background/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                            inviteRosterSelection?.type === 'invite-not-sent' && 'ring-2 ring-primary'
+                          )}
+                          onClick={() => toggleInviteRosterPanel({ type: 'invite-not-sent' })}
+                          aria-pressed={inviteRosterSelection?.type === 'invite-not-sent'}
+                        >
+                          <p className="text-xs font-semibold uppercase text-muted-foreground">Not Sent</p>
+                          <p className="mt-1 text-lg font-semibold">{inviteMetrics.notSent}</p>
+                        </button>
+
+                        {/* Tile 4: Invite Click */}
+                        <button
+                          type="button"
+                          className={cn(
+                            'rounded-md border bg-background/60 p-3 text-left shadow-sm cursor-pointer hover:bg-background/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                            (inviteRosterSelection?.type === 'invite-clicked' || inviteRosterSelection?.type === 'invite-not-clicked') && 'ring-2 ring-primary'
+                          )}
+                          onClick={() => toggleInviteRosterPanel({ type: 'invite-clicked' })}
+                          aria-pressed={inviteRosterSelection?.type === 'invite-clicked' || inviteRosterSelection?.type === 'invite-not-clicked'}
+                        >
+                          <p className="text-xs font-semibold uppercase text-muted-foreground">Invite Click</p>
+                          <p className="mt-1 text-lg font-semibold">{inviteMetrics.clicked}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {inviteMetrics.clicked} clicked · {inviteMetrics.notClicked} not
+                          </p>
+                        </button>
+
+                        {/* Tile 5: Magic Links */}
+                        <button
+                          type="button"
+                          className={cn(
+                            'rounded-md border bg-background/60 p-3 text-left shadow-sm cursor-pointer hover:bg-background/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                            inviteRosterSelection?.type === 'magic-links' && 'ring-2 ring-primary'
+                          )}
+                          onClick={() => toggleInviteRosterPanel({ type: 'magic-links' })}
+                          aria-pressed={inviteRosterSelection?.type === 'magic-links'}
+                        >
+                          <p className="text-xs font-semibold uppercase text-muted-foreground">Magic Links</p>
+                          <p className="mt-1 text-lg font-semibold">{inviteMetrics.totalMagicLinksUsed}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {inviteMetrics.totalMagicLinksIssued} requested · {inviteMetrics.totalMagicLinksUsed} used
+                          </p>
+                        </button>
+                      </div>
+                    </div>
+
+                    <CollapsibleContent forceMount className="mt-4 data-[state=closed]:hidden">
+                      {inviteRosterSelection ? renderInviteRosterPanel(inviteRosterSelection) : null}
+                    </CollapsibleContent>
+                  </div>
+                </Collapsible>
               </AccordionContent>
             </AccordionItem>
 
