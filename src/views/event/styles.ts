@@ -492,6 +492,18 @@ function getEventCss({ serif, sans }: EventStyleFonts): string {
       color: var(--ink-920);
     }
 
+    .nav-drawer .nav-links a:hover {
+      color: var(--ink-1000);
+    }
+
+    .nav-drawer .theme-toggle {
+      color: var(--ink-920);
+    }
+
+    .nav-drawer .theme-toggle:hover {
+      color: var(--ink-1000);
+    }
+
     .nav-overlay {
       position: fixed;
       inset: var(--top-bar-height) 0 0 0;
@@ -2121,6 +2133,7 @@ function getEventCss({ serif, sans }: EventStyleFonts): string {
           "header"
           "content";
         row-gap: 32px;
+        transition: row-gap 0.25s ease;
       }
 
       .timeline-section--flip .timeline-section-inner {
@@ -2213,6 +2226,7 @@ function getEventCss({ serif, sans }: EventStyleFonts): string {
         gap: 28px;
         max-width: 100%;
         width: 100%;
+        transition: opacity 0.25s ease;
       }
 
       .timeline-section--flip .timeline-content {
@@ -2236,7 +2250,51 @@ function getEventCss({ serif, sans }: EventStyleFonts): string {
       }
 
       .timeline-header-media {
-        display: none;
+        display: block;
+        margin-top: 20px;
+        margin-right: 20px;
+        opacity: 1;
+        max-height: 800px;
+        overflow: hidden;
+        transition: opacity 0.25s ease, max-height 0.25s ease, margin-top 0.25s ease;
+      }
+
+      .timeline-header-media-img {
+        display: block;
+        width: 100%;
+        height: auto;
+        object-fit: contain;
+      }
+
+      /* Fade out AND collapse image when section is expanded */
+      .timeline-section:not([data-collapsed]) .timeline-header-media {
+        opacity: 0;
+        max-height: 0;
+        margin-top: 0;
+        pointer-events: none;
+      }
+
+      /* Reduce gap between header and content when image is collapsed */
+      .timeline-section:not([data-collapsed]) .timeline-section-inner {
+        row-gap: 0;
+      }
+
+      /* Fade in content text when section is expanded */
+      .timeline-section:not([data-collapsed]) .timeline-content {
+        opacity: 1;
+      }
+
+      .timeline-section[data-collapsed] .timeline-content {
+        opacity: 0;
+      }
+
+      /* Respect reduced motion preference */
+      @media (prefers-reduced-motion: reduce) {
+        .timeline-section-inner,
+        .timeline-header-media,
+        .timeline-content {
+          transition: none;
+        }
       }
 
       .top-bar-inner {
