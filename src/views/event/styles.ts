@@ -484,8 +484,8 @@ function getEventCss({ serif, sans }: EventStyleFonts): string {
     .nav-drawer .nav-links {
       flex-direction: column;
       align-items: center;
-      gap: 28px;
-      padding: 32px 20px 48px;
+      gap: 20px;
+      padding: 24px 20px;
     }
 
     .nav-drawer .nav-links a {
