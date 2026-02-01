@@ -2107,12 +2107,16 @@ function getEventCss({ serif, sans }: EventStyleFonts): string {
     }
 
     @media (max-width: 767px) {
+      .hero-content {
+        padding-top: 40px;
+      }
+
       .timeline-layout {
-        --timeline-pad-top: 80px;
+        --timeline-pad-top: 48px;
         --timeline-pad-bottom: 120px;
         width: calc(100% - 40px);
         margin: 0 auto 120px;
-        gap: 96px;
+        gap: 32px;
       }
 
       .timeline-layout::before {
