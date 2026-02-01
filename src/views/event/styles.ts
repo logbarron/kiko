@@ -1420,7 +1420,7 @@ function getEventCss({ serif, sans }: EventStyleFonts): string {
       font-family: 'ivybodoni', ${serif};
       font-weight: 400;
       font-style: normal;
-      font-size: clamp(19px, 3vw, 52px);
+      font-size: clamp(24px, 3vw, 52px);
       letter-spacing: 0.02em;
       color: var(--ink-920);
     }
@@ -1433,7 +1433,7 @@ function getEventCss({ serif, sans }: EventStyleFonts): string {
       font-family: 'ivybodoni', ${serif};
       font-weight: 400;
       font-style: normal;
-      font-size: clamp(12px, 2vw, 35px);
+      font-size: clamp(16px, 2vw, 35px);
       letter-spacing: clamp(0.5px, 0.08vw, 1.8px);
       margin-top: clamp(12px, 2vw, 32px);
       cursor: pointer;
