@@ -26,7 +26,7 @@ export function renderTimelineSection({
     ? `<p class="timeline-summary">${escapeHtml(summary)}</p>`
     : '';
   const mediaMarkup = headerMedia
-    ? `<div class="timeline-header-media">${headerMedia}</div>`
+    ? `<div class="timeline-header-media" data-timeline-toggle-target>${headerMedia}</div>`
     : '';
 
   const safeId = escapeHtml(id);

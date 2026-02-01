@@ -2257,6 +2257,7 @@ function getEventCss({ serif, sans }: EventStyleFonts): string {
         max-height: 800px;
         overflow: hidden;
         transition: opacity 0.25s ease, max-height 0.25s ease, margin-top 0.25s ease;
+        cursor: pointer;
       }
 
       .timeline-header-media-img {
