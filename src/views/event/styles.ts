@@ -2108,7 +2108,11 @@ function getEventCss({ serif, sans }: EventStyleFonts): string {
 
     @media (max-width: 767px) {
       .hero-content {
-        padding-top: 40px;
+        padding-top: 60px;
+      }
+
+      .event-date {
+        margin-top: -8px;
       }
 
       .timeline-layout {
