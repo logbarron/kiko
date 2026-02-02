@@ -1542,6 +1542,7 @@ export function GuestManagement({
   // Invite status metrics (global, not per-event)
   const inviteMetrics = useMemo(() => {
     const onList = guests.length;
+    const totalPeople = guests.reduce((sum, g) => sum + g.party.length, 0);
     const sent = guests.filter(g => g.inviteSentAt != null).length;
     const notSent = onList - sent;
     const clicked = guests.filter(g => g.inviteClickedAt != null).length;
@@ -1552,6 +1553,7 @@ export function GuestManagement({
 
     return {
       onList,
+      totalPeople,
       sent,
       notSent,
       clicked,
@@ -2875,7 +2877,7 @@ export function GuestManagement({
                   <div className="rounded-lg border p-4">
                     <div className="space-y-3">
                       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-                        {/* Tile 1: Guests */}
+                        {/* Tile 1: Invites */}
                         <button
                           type="button"
                           className={cn(
@@ -2885,8 +2887,11 @@ export function GuestManagement({
                           onClick={() => toggleInviteRosterPanel({ type: 'on-list' })}
                           aria-pressed={inviteRosterSelection?.type === 'on-list'}
                         >
-                          <p className="text-xs font-semibold uppercase text-muted-foreground">Guests</p>
+                          <p className="text-xs font-semibold uppercase text-muted-foreground">Invites</p>
                           <p className="mt-1 text-lg font-semibold">{inviteMetrics.onList}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {inviteMetrics.totalPeople} total guests
+                          </p>
                         </button>
 
                         {/* Tile 2: Invite Sent */}
