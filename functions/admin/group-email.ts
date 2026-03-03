@@ -4,6 +4,13 @@ import { sendGroupEmail } from '../../src/lib/gmail';
 import { logError } from '../../src/lib/logger';
 import { requireAccessAssertion } from '../../src/lib/access';
 import type { Env, GuestProfile } from '../../src/types';
+import { migrateProfile } from './profileUtils';
+import { loadEventSummaries } from './loadEventSummaries';
+
+// Cloudflare free plan allows 50 external subrequests per invocation.
+// With token caching: 1 token + 1 JWKS + BATCH_SIZE sends = BATCH_SIZE + 2.
+// 24 + 2 = 26, safely under the 50 limit.
+const BATCH_SIZE = 24;
 
 interface GroupEmailRequestBody {
   subject?: unknown;
@@ -12,6 +19,8 @@ interface GroupEmailRequestBody {
   recipientEventFilter?: unknown;
   recipientStatusFilter?: unknown;
   recipientCustomIds?: unknown;
+  offset?: unknown;
+  expectedTotal?: unknown;
 }
 
 export const onRequestPost: PagesFunction<Env> = async (context) => {
@@ -32,12 +41,26 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
     const mode = data.recipientMode === 'filter' || data.recipientMode === 'custom'
       ? data.recipientMode
       : null;
+    const offset = typeof data.offset === 'number' && data.offset >= 0
+      ? Math.floor(data.offset)
+      : 0;
+    const expectedTotal = typeof data.expectedTotal === 'number' && Number.isFinite(data.expectedTotal) && data.expectedTotal >= 0
+      ? Math.floor(data.expectedTotal)
+      : null;
 
     if (!subject || !body || !mode) {
       return new Response('Missing required fields', { status: 400 }) as unknown as CfResponse;
     }
 
-    let emails: string[] = [];
+    const { events } = await loadEventSummaries(env);
+    const emailSet = new Set<string>();
+
+    const addRecipientEmail = (email: string | undefined) => {
+      const normalized = email?.trim().toLowerCase();
+      if (normalized) {
+        emailSet.add(normalized);
+      }
+    };
 
     // Custom mode: get emails from guest IDs
     if (mode === 'custom') {
@@ -55,20 +78,24 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
         const chunk = ids.slice(i, i + D1_PARAM_LIMIT);
         const placeholders = chunk.map(() => '?').join(',');
         const rows = await env.DB.prepare(
-          `SELECT email_hash, enc_profile FROM guests WHERE id IN (${placeholders})`
+          `SELECT email_hash, enc_profile FROM guests WHERE id IN (${placeholders}) ORDER BY email_hash`
         ).bind(...chunk).all();
 
         for (const row of rows.results) {
-          const profile = await decryptJson(
-            row.enc_profile as string,
-            env.KEK_B64,
-            'guests',
-            row.email_hash as string,
-            'profile'
-          ) as GuestProfile;
-
-          if (profile.email?.trim()) {
-            emails.push(profile.email.trim().toLowerCase());
+          try {
+            const profile = migrateProfile(
+              await decryptJson(
+                row.enc_profile as string,
+                env.KEK_B64,
+                'guests',
+                row.email_hash as string,
+                'profile'
+              ),
+              events
+            );
+            addRecipientEmail(profile.email);
+          } catch (error) {
+            logError('admin/group-email/decrypt-failed', error);
           }
         }
       }
@@ -88,7 +115,7 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
       }
 
       const allRows = await env.DB.prepare(
-        'SELECT email_hash, enc_profile FROM guests'
+        'SELECT email_hash, enc_profile FROM guests ORDER BY email_hash'
       ).all();
 
       // Helper function (matches frontend line 200)
@@ -97,13 +124,22 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
       };
 
       for (const row of allRows.results) {
-        const profile = await decryptJson(
-          row.enc_profile as string,
-          env.KEK_B64,
-          'guests',
-          row.email_hash as string,
-          'profile'
-        ) as GuestProfile;
+        let profile: GuestProfile;
+        try {
+          profile = migrateProfile(
+            await decryptJson(
+              row.enc_profile as string,
+              env.KEK_B64,
+              'guests',
+              row.email_hash as string,
+              'profile'
+            ),
+            events
+          );
+        } catch (error) {
+          logError('admin/group-email/decrypt-failed', error);
+          continue;
+        }
 
         // Must have email
         if (!profile.email?.trim()) {
@@ -124,13 +160,36 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
         if (statusFilter !== 'all') {
           if (statusFilter === 'has-email') {
             // Already checked email above
-            emails.push(profile.email.trim().toLowerCase());
+            addRecipientEmail(profile.email);
             continue;
           }
 
           if (eventFilter === 'all') {
-            // Can't filter by status without specific event
-            emails.push(profile.email.trim().toLowerCase());
+            const statuses: Array<'yes' | 'no' | 'pending'> = [];
+            profile.party.forEach(member => {
+              member.invitedEvents.forEach(eventId => {
+                statuses.push(getAttendanceStatus(member.attendance?.[eventId]));
+              });
+            });
+
+            if (statuses.length === 0) {
+              continue;
+            }
+
+            let matches = false;
+            if (statusFilter === 'accepted') {
+              matches = statuses.some(s => s === 'yes');
+            } else if (statusFilter === 'pending') {
+              matches = statuses.some(s => s === 'pending');
+            } else if (statusFilter === 'declined') {
+              matches = statuses.every(s => s === 'no');
+            } else if (statusFilter === 'invited') {
+              matches = statuses.some(s => s === 'yes' || s === 'pending');
+            }
+
+            if (matches) {
+              addRecipientEmail(profile.email);
+            }
             continue;
           }
 
@@ -160,27 +219,56 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
           }
 
           if (matches) {
-            emails.push(profile.email.trim().toLowerCase());
+            addRecipientEmail(profile.email);
           }
         } else {
           // No status filter, just add
-          emails.push(profile.email.trim().toLowerCase());
+          addRecipientEmail(profile.email);
         }
       }
     }
 
-    if (emails.length === 0) {
-      return new Response('No recipients found', { status: 400 }) as unknown as CfResponse;
+    const emails = Array.from(emailSet).sort();
+    const total = emails.length;
+
+    if (expectedTotal !== null && expectedTotal !== total) {
+      return new Response(JSON.stringify({
+        error: 'Recipient count mismatch. Send aborted.',
+        expectedTotal,
+        actualTotal: total
+      }), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json' }
+      }) as unknown as CfResponse;
     }
 
-    // Send individual email to each recipient
+    if (total === 0) {
+      return new Response(JSON.stringify({
+        emailsSent: 0, failed: 0, total: 0, nextOffset: 0, done: true
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      }) as unknown as CfResponse;
+    }
+
+    // Slice the batch from offset
+    const batch = emails.slice(offset, offset + BATCH_SIZE);
+
+    if (batch.length === 0) {
+      return new Response(JSON.stringify({
+        emailsSent: 0, failed: 0, total, nextOffset: offset, done: true
+      }), {
+        headers: { 'Content-Type': 'application/json' }
+      }) as unknown as CfResponse;
+    }
+
+    // Send this batch
     // Gmail API limit: 150 emails/minute (2.5/sec), use 500ms delay to stay under
     let sentCount = 0;
     let failedCount = 0;
 
-    for (let i = 0; i < emails.length; i++) {
+    for (let i = 0; i < batch.length; i++) {
       try {
-        await sendGroupEmail(env, emails[i], subject, body);
+        await sendGroupEmail(env, batch[i], subject, body);
         sentCount++;
       } catch (error) {
         // Log error but continue sending to others
@@ -190,7 +278,7 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
       }
 
       // Add 500ms delay between sends (except after last email)
-      if (i < emails.length - 1) {
+      if (i < batch.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
@@ -203,34 +291,19 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
       ).bind(null, 'group_email_sent', now).run();
     }
 
-    // Return response based on success/failure counts
-    if (failedCount === 0) {
-      // All emails sent successfully
-      return new Response(JSON.stringify({
-        success: true,
-        emailsSent: sentCount
-      }), {
-        headers: { 'Content-Type': 'application/json' }
-      }) as unknown as CfResponse;
-    } else if (sentCount > 0) {
-      // Partial success
-      return new Response(JSON.stringify({
-        success: true,
-        emailsSent: sentCount,
-        failed: failedCount
-      }), {
-        status: 207,  // Multi-Status
-        headers: { 'Content-Type': 'application/json' }
-      }) as unknown as CfResponse;
-    } else {
-      // All failed
-      return new Response(JSON.stringify({
-        error: 'All emails failed to send'
-      }), {
-        status: 500,
-        headers: { 'Content-Type': 'application/json' }
-      }) as unknown as CfResponse;
-    }
+    const nextOffset = offset + batch.length;
+    const done = nextOffset >= total;
+
+    return new Response(JSON.stringify({
+      emailsSent: sentCount,
+      failed: failedCount,
+      total,
+      nextOffset,
+      done,
+    }), {
+      status: failedCount > 0 && sentCount > 0 ? 207 : failedCount > 0 ? 500 : 200,
+      headers: { 'Content-Type': 'application/json' }
+    }) as unknown as CfResponse;
 
   } catch (error) {
     logError('admin/group-email/post', error);

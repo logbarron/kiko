@@ -5,14 +5,6 @@ import type { AttendanceRecord } from '../../types';
 import { toast } from 'sonner';
 import { adminFetch, isAdminAuthError } from './admin-auth';
 
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-  CardFooter
-} from '../ui/card';
 import { Badge } from '../ui/badge';
 import {
   Accordion,
@@ -183,20 +175,6 @@ interface GuestManagementProps {
   onEmailSubjectsChange: (next: { magicLinkSubject: string; inviteSubject: string }) => void;
   saveEmailSubjects: () => Promise<void>;
 }
-const auditLabels: Record<string, string> = {
-  invite_sent: 'Invite sent',
-  invite_seeded: 'Guest seeded (no email)',
-  invite_clicked: 'Invite clicked',
-  email_sent: 'Magic link requested',
-  link_clicked: 'Magic link opened',
-  verify_ok: 'Verification success',
-  verify_fail: 'Verification failed',
-  rsvp_submit: 'RSVP submitted',
-  event_visibility_updated: 'Event visibility updated',
-  event_attendance_updated: 'Event attendance updated',
-  guest_deleted: 'Guest deleted',
-  event_updated: 'Event updated'
-};
 
 const getAttendanceStatus = (record: AttendanceRecord | undefined): 'yes' | 'no' | 'pending' => {
   return record?.status ?? 'pending';
@@ -227,32 +205,8 @@ const relativeTimeFromSeconds = (seconds?: number | null): string | null => {
   }
 };
 
-const relativeTimeFromIso = (iso?: string): string | null => {
-  if (!iso) {
-    return null;
-  }
-  try {
-    return formatDistanceToNow(new Date(iso), { addSuffix: true });
-  } catch (error) {
-    console.error('Error formatting ISO time', error);
-    return null;
-  }
-};
-
 const getActivitySummary = (guest: Guest, type: string): ActivitySummary | undefined => {
   return guest.activity?.audit?.[type];
-};
-
-const formatSummary = (summary?: ActivitySummary): string => {
-  if (!summary || summary.count === 0) {
-    return '—';
-  }
-  const relative = summary.last ? relativeTimeFromSeconds(summary.last) : null;
-  return relative ? `${summary.count} • ${relative}` : `${summary.count}`;
-};
-
-const formatAuditType = (type: string): string => {
-  return auditLabels[type] ?? type.replace(/_/g, ' ');
 };
 
 const deriveInviteStatus = (guest: Guest): 'yes' | 'no' | 'pending' => {
@@ -902,9 +856,9 @@ const GuestMealsAndAllergiesAccordion = ({
 const GuestDetail = ({
   guest,
   events,
-  auditEvents,
-  isLoading,
-  error,
+  auditEvents: _auditEvents,
+  isLoading: _isLoading,
+  error: _error,
   eventTimeZone,
   onUpdateEventVisibility,
   onTogglePlusOne,
@@ -1305,6 +1259,7 @@ export function GuestManagement({
   const [groupEmailSubject, setGroupEmailSubject] = useState('');
   const [groupEmailBody, setGroupEmailBody] = useState('');
   const [groupEmailSending, setGroupEmailSending] = useState(false);
+  const [groupEmailProgress, setGroupEmailProgress] = useState<{ sent: number; failed: number; total: number } | null>(null);
   const [recipientMode, setRecipientMode] = useState<'filter' | 'custom'>('filter');
   const [recipientEventFilter, setRecipientEventFilter] = useState<string>('');
   const [recipientStatusFilter, setRecipientStatusFilter] = useState<string>('');
@@ -1461,7 +1416,6 @@ export function GuestManagement({
 
     guests.forEach((guest) => {
       const primaryMember = guest.party.find(member => member.role === 'primary') ?? guest.party[0] ?? null;
-      const primaryName = primaryMember ? formatMemberDisplayName(primaryMember) : null;
       const guestSummary = getPartySummary(guest);
       const partySortKey = buildPartySortKey(primaryMember, guestSummary, guest.email, guest.id);
 
@@ -1649,11 +1603,6 @@ export function GuestManagement({
   const sortedGuests = useMemo(() => {
     return [...filteredGuests].sort((a, b) => buildGuestSortKey(a).localeCompare(buildGuestSortKey(b)));
   }, [filteredGuests]);
-
-  const handleSelectEvent = (eventId: string | null) => {
-    setSelectedEventId((prev) => (prev === eventId ? null : eventId));
-    setSelectedAttendance('all');
-  };
 
   useEffect(() => {
     if (!events.length) {
@@ -2271,8 +2220,28 @@ export function GuestManagement({
         }
 
         if (recipientEventFilter === 'all') {
-          // Can't filter by status without specific event
-          return true;
+          const statuses: Array<'yes' | 'no' | 'pending'> = [];
+
+          guest.party.forEach(member => {
+            member.invitedEvents.forEach(eventId => {
+              statuses.push(getAttendanceStatus(member.attendance?.[eventId]));
+            });
+          });
+
+          if (statuses.length === 0) {
+            return false;
+          }
+
+          if (recipientStatusFilter === 'accepted') {
+            return statuses.some(s => s === 'yes');
+          }
+          if (recipientStatusFilter === 'pending') {
+            return statuses.some(s => s === 'pending');
+          }
+          if (recipientStatusFilter === 'declined') {
+            return statuses.every(s => s === 'no');
+          }
+          return statuses.some(s => s === 'yes' || s === 'pending');
         }
 
         // Use the same logic as getEventStatusForGuest - check party member attendance
@@ -2341,11 +2310,13 @@ export function GuestManagement({
 
   const handleSendGroupEmail = async () => {
     setGroupEmailSending(true);
+    setGroupEmailProgress(null);
 
     try {
-      const payload = {
+      const basePayload = {
         subject: groupEmailSubject.trim(),
         body: groupEmailBody.trim(),
+        expectedTotal: recipientStats.emails,
         recipientMode,
         ...(recipientMode === 'filter' ? {
           recipientEventFilter,
@@ -2355,35 +2326,68 @@ export function GuestManagement({
         })
       };
 
-      const response = await adminFetch('/admin/group-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      let totalSent = 0;
+      let totalFailed = 0;
+      let offset = 0;
+      let done = false;
 
-      const responseClone = response.clone();
-      const result = await response.json().catch(() => null) as
-        | { success?: boolean; emailsSent?: number; failed?: number; error?: string }
-        | null;
-      const emailsSent = typeof result?.emailsSent === 'number' ? result.emailsSent : undefined;
-      const failedCount = typeof result?.failed === 'number' ? result.failed : undefined;
-      const errorMessage = typeof result?.error === 'string' ? result.error : undefined;
+      while (!done) {
+        const response = await adminFetch('/admin/group-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ...basePayload, offset })
+        });
 
-      if (!response.ok) {
-        const fallbackText = await responseClone.text().catch(() => '');
-        toast.error(errorMessage || fallbackText || 'Failed to send email');
-        return;
+        const responseClone = response.clone();
+        const result = await response.json().catch(() => null) as
+          | {
+            emailsSent?: number;
+            failed?: number;
+            total?: number;
+            nextOffset?: number;
+            done?: boolean;
+            error?: string;
+            expectedTotal?: number;
+            actualTotal?: number;
+          }
+          | null;
+
+        if (!response.ok && response.status !== 207) {
+          if (
+            response.status === 409 &&
+            typeof result?.expectedTotal === 'number' &&
+            typeof result?.actualTotal === 'number'
+          ) {
+            toast.error(
+              `Recipient count changed (expected ${result.expectedTotal}, server found ${result.actualTotal}). Send aborted.`
+            );
+            return;
+          }
+          const errorMessage = typeof result?.error === 'string' ? result.error : undefined;
+          const fallbackText = await responseClone.text().catch(() => '');
+          toast.error(errorMessage || fallbackText || 'Failed to send email');
+          return;
+        }
+
+        const batchSent = typeof result?.emailsSent === 'number' ? result.emailsSent : 0;
+        const batchFailed = typeof result?.failed === 'number' ? result.failed : 0;
+        const total = typeof result?.total === 'number' ? result.total : 0;
+
+        totalSent += batchSent;
+        totalFailed += batchFailed;
+        offset = typeof result?.nextOffset === 'number' ? result.nextOffset : offset + batchSent + batchFailed;
+        done = result?.done === true;
+
+        setGroupEmailProgress({ sent: totalSent, failed: totalFailed, total });
       }
 
-      // Handle success or partial success
-      if (failedCount && failedCount > 0) {
-        // Partial success (HTTP 207)
-        const sentCount = emailsSent ?? 0;
-        toast.warning(`Email sent to ${sentCount} recipient${sentCount === 1 ? '' : 's'}, but ${failedCount} failed`);
+      // Show final toast
+      if (totalFailed > 0 && totalSent > 0) {
+        toast.warning(`Email sent to ${totalSent} recipient${totalSent === 1 ? '' : 's'}, but ${totalFailed} failed`);
+      } else if (totalSent > 0) {
+        toast.success(`Email sent to ${totalSent} recipient${totalSent === 1 ? '' : 's'}`);
       } else {
-        // Full success
-        const sentCount = emailsSent ?? 0;
-        toast.success(`Email sent to ${sentCount} recipient${sentCount === 1 ? '' : 's'}`);
+        toast.error('All emails failed to send');
       }
 
       // Reset form
@@ -2399,6 +2403,7 @@ export function GuestManagement({
       toast.error('Failed to send email');
     } finally {
       setGroupEmailSending(false);
+      setGroupEmailProgress(null);
     }
   };
 
@@ -2845,7 +2850,12 @@ export function GuestManagement({
                     />
                   </div>
 
-                  <div className="flex justify-end">
+                  <div className="flex items-center justify-end gap-3">
+                    {groupEmailProgress && (
+                      <span className="text-sm text-muted-foreground">
+                        Sent {groupEmailProgress.sent} of {groupEmailProgress.total}...
+                      </span>
+                    )}
                     <Button
                       onClick={handleSendGroupEmail}
                       disabled={groupEmailSending || !groupEmailSubject.trim() || !groupEmailBody.trim() || recipientStats.emails === 0}

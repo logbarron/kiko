@@ -31,7 +31,14 @@ interface GmailSendPayload {
   inlineImages?: InlineImageAttachment[];
 }
 
+let cachedToken: { token: string; expiresAt: number } | null = null;
+
 async function getAccessToken(env: Env): Promise<string> {
+  const now = Date.now();
+  if (cachedToken && cachedToken.expiresAt > now) {
+    return cachedToken.token;
+  }
+
   const response = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: {
@@ -50,6 +57,8 @@ async function getAccessToken(env: Env): Promise<string> {
   }
 
   const data: TokenResponse = await response.json();
+  // Google tokens last 3600s; cache with 5-min safety margin
+  cachedToken = { token: data.access_token, expiresAt: now + (data.expires_in - 300) * 1000 };
   return data.access_token;
 }
 
